@@ -427,3 +427,10 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Local server runtime data
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+data/
