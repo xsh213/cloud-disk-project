@@ -136,28 +136,22 @@ bool initStorageDirectory()
 // =====================================================
 // 3. 添加文件
 // =====================================================
-bool addFile(QSqlDatabase& db,
+bool addFile(
+    QSqlDatabase& db,
     const QString& sourcePath,
     const QString& owner)
 {
-    // -------------------------------------------------
-    // 检查用户名
-    // -------------------------------------------------
-    if (owner.isEmpty())
+    // 检查用户名，防止生成非法存储路径
+    if (owner.isEmpty() ||
+        owner.contains("/") ||
+        owner.contains("\\"))
     {
-        qDebug() << "Owner cannot be empty.";
-
+        qDebug() << "Invalid owner.";
         return false;
     }
 
-
-    // -------------------------------------------------
-    // 获取源文件信息
-    // -------------------------------------------------
     QFileInfo fileInfo(sourcePath);
 
-
-    // 判断源文件是否存在
     if (!fileInfo.exists() || !fileInfo.isFile())
     {
         qDebug() << "Source file does not exist:"
@@ -166,51 +160,28 @@ bool addFile(QSqlDatabase& db,
         return false;
     }
 
+    QString filename = fileInfo.fileName();
+    qint64 fileSize = fileInfo.size();
 
-    QString filename =
-        fileInfo.fileName();
-
-    qint64 fileSize =
-        fileInfo.size();
-
-
-    // -------------------------------------------------
-    // 为当前用户建立独立存储目录
-    //
-    // 例如：
-    // data/files/user01/
-    // -------------------------------------------------
     QString userStorageDir =
         "data/files/" + owner;
 
-
     QDir dir;
 
-
-    if (!dir.exists(userStorageDir))
+    if (!dir.exists(userStorageDir) &&
+        !dir.mkpath(userStorageDir))
     {
-        if (!dir.mkpath(userStorageDir))
-        {
-            qDebug() << "Failed to create user storage directory:"
-                << userStorageDir;
+        qDebug() << "Failed to create user storage directory:"
+            << userStorageDir;
 
-            return false;
-        }
+        return false;
     }
 
-
-    // -------------------------------------------------
-    // 生成服务器端实际存储路径
-    // -------------------------------------------------
     QString targetPath =
         userStorageDir + "/" + filename;
 
-
-    // -------------------------------------------------
-    // 检查数据库中是否已经存在同名文件
-    // -------------------------------------------------
+    // 检查数据库中是否存在同名文件
     QSqlQuery checkQuery(db);
-
 
     checkQuery.prepare(
         "SELECT id "
@@ -218,10 +189,8 @@ bool addFile(QSqlDatabase& db,
         "WHERE filename = ? AND owner = ?"
     );
 
-
     checkQuery.addBindValue(filename);
     checkQuery.addBindValue(owner);
-
 
     if (!checkQuery.exec())
     {
@@ -231,7 +200,6 @@ bool addFile(QSqlDatabase& db,
         return false;
     }
 
-
     if (checkQuery.next())
     {
         qDebug() << "File already exists for this user:"
@@ -240,10 +208,6 @@ bool addFile(QSqlDatabase& db,
         return false;
     }
 
-
-    // -------------------------------------------------
-    // 检查磁盘中是否已经存在同名文件
-    // -------------------------------------------------
     if (QFile::exists(targetPath))
     {
         qDebug() << "Physical file already exists:"
@@ -252,71 +216,98 @@ bool addFile(QSqlDatabase& db,
         return false;
     }
 
-
-    // -------------------------------------------------
-    // 将真实文件复制到服务器目录
-    // -------------------------------------------------
+    // 先复制真实文件
     if (!QFile::copy(sourcePath, targetPath))
     {
         qDebug() << "Failed to copy file.";
-
         return false;
     }
 
+    QString uploadTime =
+        QDateTime::currentDateTime()
+        .toString("yyyy-MM-dd HH:mm:ss");
 
-    qDebug() << "File copied successfully:"
-        << targetPath;
+    // files和file_versions必须同时写入成功
+    if (!db.transaction())
+    {
+        qDebug() << "Failed to start add-file transaction.";
 
+        QFile::remove(targetPath);
+        return false;
+    }
 
-    // -------------------------------------------------
-    // 将文件信息写入 SQLite
-    // -------------------------------------------------
-    QSqlQuery insertQuery(db);
+    QSqlQuery insertFileQuery(db);
 
-
-    insertQuery.prepare(
+    insertFileQuery.prepare(
         "INSERT INTO files "
         "(filename, size, owner, path, upload_time) "
         "VALUES (?, ?, ?, ?, ?)"
     );
 
+    insertFileQuery.addBindValue(filename);
+    insertFileQuery.addBindValue(fileSize);
+    insertFileQuery.addBindValue(owner);
+    insertFileQuery.addBindValue(targetPath);
+    insertFileQuery.addBindValue(uploadTime);
 
-    insertQuery.addBindValue(filename);
-    insertQuery.addBindValue(fileSize);
-    insertQuery.addBindValue(owner);
-    insertQuery.addBindValue(targetPath);
-
-
-    // 自动获取当前时间
-    insertQuery.addBindValue(
-        QDateTime::currentDateTime()
-        .toString("yyyy-MM-dd HH:mm:ss")
-    );
-
-
-    // -------------------------------------------------
-    // 如果数据库写入失败
-    // 则删除刚才复制的文件
-    // 避免数据库和磁盘不一致
-    // -------------------------------------------------
-    if (!insertQuery.exec())
+    if (!insertFileQuery.exec())
     {
-        qDebug() << "Database insert failed:"
-            << insertQuery.lastError().text();
+        qDebug() << "Insert file record failed:"
+            << insertFileQuery.lastError().text();
 
-
+        db.rollback();
         QFile::remove(targetPath);
-
 
         return false;
     }
 
+    int fileId =
+        insertFileQuery.lastInsertId().toInt();
 
-    qDebug() << "File record saved successfully!";
+    // 新文件立即登记为版本1，不需要重启服务器
+    QSqlQuery insertVersionQuery(db);
+
+    insertVersionQuery.prepare(
+        "INSERT INTO file_versions "
+        "(file_id, version_number, size, path, sha256, "
+        "upload_time, is_complete) "
+        "VALUES (?, 1, ?, ?, NULL, ?, 1)"
+    );
+
+    insertVersionQuery.addBindValue(fileId);
+    insertVersionQuery.addBindValue(fileSize);
+    insertVersionQuery.addBindValue(targetPath);
+    insertVersionQuery.addBindValue(uploadTime);
+
+    if (!insertVersionQuery.exec())
+    {
+        qDebug() << "Insert version 1 failed:"
+            << insertVersionQuery.lastError().text();
+
+        db.rollback();
+        QFile::remove(targetPath);
+
+        return false;
+    }
+
+    if (!db.commit())
+    {
+        qDebug() << "Commit add-file transaction failed:"
+            << db.lastError().text();
+
+        db.rollback();
+        QFile::remove(targetPath);
+
+        return false;
+    }
+
+    qDebug() << "File added successfully!";
+    qDebug() << "File ID:" << fileId;
+    qDebug() << "Initial version: 1";
+    qDebug() << "Path:" << targetPath;
 
     return true;
 }
-
 
 // =====================================================
 // 4. 查询某个用户的文件列表
@@ -1079,6 +1070,249 @@ bool addFileVersion(
     qDebug() << "File ID:" << fileId;
     qDebug() << "Version:" << nextVersion;
     qDebug() << "Path:" << targetPath;
+
+    return true;
+}
+
+// =====================================================
+// 10. 获取指定历史版本的真实存储路径
+// =====================================================
+QString getFileVersionPath(
+    QSqlDatabase& db,
+    int fileId,
+    int versionNumber,
+    const QString& owner)
+{
+    if (versionNumber <= 0)
+    {
+        qDebug() << "Invalid version number.";
+        return "";
+    }
+
+    QSqlQuery query(db);
+
+    query.prepare(
+        "SELECT v.path "
+        "FROM file_versions v "
+        "INNER JOIN files f ON v.file_id = f.id "
+        "WHERE v.file_id = ? "
+        "AND v.version_number = ? "
+        "AND f.owner = ? "
+        "AND v.is_complete = 1"
+    );
+
+    query.addBindValue(fileId);
+    query.addBindValue(versionNumber);
+    query.addBindValue(owner);
+
+    if (!query.exec())
+    {
+        qDebug() << "Get file version path failed:"
+            << query.lastError().text();
+
+        return "";
+    }
+
+    if (!query.next())
+    {
+        qDebug() << "File version not found or permission denied.";
+        return "";
+    }
+
+    QString versionPath =
+        query.value("path").toString();
+
+    if (!QFile::exists(versionPath))
+    {
+        qDebug() << "Version physical file does not exist:"
+            << versionPath;
+
+        return "";
+    }
+
+    return versionPath;
+}
+
+
+// =====================================================
+// 11. 恢复指定历史版本
+// =====================================================
+bool restoreFileVersion(
+    QSqlDatabase& db,
+    int fileId,
+    int versionNumber,
+    const QString& owner)
+{
+    QString versionPath =
+        getFileVersionPath(
+            db,
+            fileId,
+            versionNumber,
+            owner
+        );
+
+    if (versionPath.isEmpty())
+    {
+        qDebug() << "Restore file version failed.";
+        return false;
+    }
+
+    // 恢复时不覆盖历史记录，
+    // 而是将指定版本复制为一个新的最新版本
+    if (!addFileVersion(
+        db,
+        fileId,
+        versionPath,
+        owner))
+    {
+        qDebug() << "Create restored version failed.";
+        return false;
+    }
+
+    qDebug() << "File version restored successfully!";
+    qDebug() << "Restored from version:" << versionNumber;
+
+    return true;
+}
+
+
+// =====================================================
+// 12. 删除指定历史版本
+// =====================================================
+bool deleteFileVersion(
+    QSqlDatabase& db,
+    int fileId,
+    int versionNumber,
+    const QString& owner)
+{
+    if (versionNumber <= 0)
+    {
+        qDebug() << "Invalid version number.";
+        return false;
+    }
+
+    // 查询指定版本，同时验证文件所有者
+    QSqlQuery findQuery(db);
+
+    findQuery.prepare(
+        "SELECT v.path, f.path AS latest_path "
+        "FROM file_versions v "
+        "INNER JOIN files f ON v.file_id = f.id "
+        "WHERE v.file_id = ? "
+        "AND v.version_number = ? "
+        "AND f.owner = ?"
+    );
+
+    findQuery.addBindValue(fileId);
+    findQuery.addBindValue(versionNumber);
+    findQuery.addBindValue(owner);
+
+    if (!findQuery.exec())
+    {
+        qDebug() << "Find file version failed:"
+            << findQuery.lastError().text();
+
+        return false;
+    }
+
+    if (!findQuery.next())
+    {
+        qDebug() << "File version not found or permission denied.";
+        return false;
+    }
+
+    QString versionPath =
+        findQuery.value("path").toString();
+
+    QString latestPath =
+        findQuery.value("latest_path").toString();
+
+    // files表指向的版本是当前最新版本，不能单独删除
+    if (versionPath == latestPath)
+    {
+        qDebug() << "The latest version cannot be deleted.";
+        return false;
+    }
+
+    if (!QFile::exists(versionPath))
+    {
+        qDebug() << "Version physical file does not exist:"
+            << versionPath;
+
+        return false;
+    }
+
+    // 先临时改名，数据库操作失败时可以恢复
+    QString tempPath =
+        versionPath + ".deleting";
+
+    if (QFile::exists(tempPath))
+    {
+        qDebug() << "Temporary deletion file already exists:"
+            << tempPath;
+
+        return false;
+    }
+
+    if (!QFile::rename(versionPath, tempPath))
+    {
+        qDebug() << "Prepare version deletion failed.";
+        return false;
+    }
+
+    if (!db.transaction())
+    {
+        qDebug() << "Start version deletion transaction failed.";
+
+        QFile::rename(tempPath, versionPath);
+        return false;
+    }
+
+    QSqlQuery deleteQuery(db);
+
+    deleteQuery.prepare(
+        "DELETE FROM file_versions "
+        "WHERE file_id = ? AND version_number = ?"
+    );
+
+    deleteQuery.addBindValue(fileId);
+    deleteQuery.addBindValue(versionNumber);
+
+    if (!deleteQuery.exec() ||
+        deleteQuery.numRowsAffected() != 1)
+    {
+        qDebug() << "Delete file version record failed:"
+            << deleteQuery.lastError().text();
+
+        db.rollback();
+        QFile::rename(tempPath, versionPath);
+
+        return false;
+    }
+
+    if (!db.commit())
+    {
+        qDebug() << "Commit version deletion failed:"
+            << db.lastError().text();
+
+        db.rollback();
+        QFile::rename(tempPath, versionPath);
+
+        return false;
+    }
+
+    if (!QFile::remove(tempPath))
+    {
+        qDebug() << "Warning: version record was deleted,"
+            << "but temporary physical file remains:"
+            << tempPath;
+
+        return false;
+    }
+
+    qDebug() << "File version deleted successfully!";
+    qDebug() << "File ID:" << fileId;
+    qDebug() << "Deleted version:" << versionNumber;
 
     return true;
 }
