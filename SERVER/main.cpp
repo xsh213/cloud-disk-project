@@ -94,7 +94,7 @@ int main(int argc, char* argv[])
 /*
     bool versionSuccess = addFileVersion(
         db,
-        5,
+        1,
         "D:/sizheng.pdf",
         currentUser
     );
@@ -110,9 +110,36 @@ int main(int argc, char* argv[])
 
     listFileVersions(
         db,
-        5,
+        1,
         currentUser
     );
+*/
+// -------------------------------------------------
+// 一次性测试：将v1恢复为新的最新版本
+// 成功后必须关闭
+// -------------------------------------------------
+    /*
+bool restoreSuccess = restoreFileVersion(
+    db,
+    1,
+    1,
+    currentUser
+);
+
+if (restoreSuccess)
+{
+    qDebug() << "Restore test succeeded!";
+}
+else
+{
+    qDebug() << "Restore test failed!";
+}
+
+listFileVersions(
+    db,
+    1,
+    currentUser
+);
 */
 
     // -------------------------------------------------
@@ -169,6 +196,55 @@ if (!filePath.isEmpty())
              << filePath;
 }
 */
+
+// 前面的添加、版本添加、恢复测试都已注释
+
+// 安全测试代码放这里
+QString versionPath = getFileVersionPath(
+    db,
+    1,
+    1,
+    currentUser
+);
+
+// -------------------------------------------------
+// 安全测试：读取v1路径，并验证最新版本不能删除
+// -------------------------------------------------
+/*
+QString versionOnePath = getFileVersionPath(
+    db,
+    1,
+    1,
+    currentUser
+);
+
+if (!versionOnePath.isEmpty())
+{
+    qDebug() << "Version 1 ready for download:"
+        << versionOnePath;
+}
+
+bool latestDeleteResult = deleteFileVersion(
+    db,
+    1,
+    3,
+    currentUser
+);
+
+if (!latestDeleteResult)
+{
+    qDebug()
+        << "Safety test passed: latest version was protected.";
+}
+
+listFileVersions(
+    db,
+    1,
+    currentUser
+);
+*/
+
+// 下面开始服务器代码
 
     QTcpServer tcpServer;
 

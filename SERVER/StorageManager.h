@@ -22,7 +22,7 @@ void listFiles(
     const QString& owner
 );
 
-// 删除文件
+// 删除整个文件及其全部版本
 bool deleteFile(
     QSqlDatabase& db,
     int fileId,
@@ -37,7 +37,7 @@ bool renameFile(
     const QString& newFilename
 );
 
-// 获取文件的真实存储路径
+// 获取文件最新版本的真实存储路径
 QString getFilePath(
     QSqlDatabase& db,
     int fileId,
@@ -56,5 +56,31 @@ bool addFileVersion(
     QSqlDatabase& db,
     int fileId,
     const QString& sourcePath,
+    const QString& owner
+);
+
+// 获取指定历史版本的真实存储路径
+QString getFileVersionPath(
+    QSqlDatabase& db,
+    int fileId,
+    int versionNumber,
+    const QString& owner
+);
+
+// 恢复指定历史版本
+// 恢复操作会生成一个新的最新版本，不会覆盖原历史记录
+bool restoreFileVersion(
+    QSqlDatabase& db,
+    int fileId,
+    int versionNumber,
+    const QString& owner
+);
+
+// 删除指定历史版本
+// 不允许删除当前最新版本
+bool deleteFileVersion(
+    QSqlDatabase& db,
+    int fileId,
+    int versionNumber,
     const QString& owner
 );
