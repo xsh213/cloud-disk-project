@@ -84,3 +84,23 @@ bool deleteFileVersion(
     int versionNumber,
     const QString& owner
 );
+
+// 计算指定文件的SHA-256值
+QString calculateFileSha256(
+    const QString& filePath
+);
+
+// 根据SHA-256查找服务器中已有的完整文件
+// 找不到时返回空字符串
+QString findFilePathBySha256(
+    QSqlDatabase& db,
+    const QString& sha256
+);
+
+// 根据服务器已有内容完成秒传
+bool instantUploadFile(
+    QSqlDatabase& db,
+    const QString& filename,
+    const QString& sha256,
+    const QString& owner
+);

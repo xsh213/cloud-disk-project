@@ -8,6 +8,12 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QDir>
+#include <QCryptographicHash>
+#include <QList>
+#include <QPair>
+static bool backfillMissingSha256(
+    QSqlDatabase& db
+);
 
 // =====================================================
 // 1. 初始化数据库
@@ -102,6 +108,14 @@ bool initDatabase(QSqlDatabase& db)
 
     qDebug() << "Existing files migrated to version 1!";
 
+    if (!backfillMissingSha256(db))
+    {
+        qDebug() << "Backfill missing SHA-256 failed.";
+        return false;
+    }
+
+    return true;
+
     return true;
 }
 
@@ -162,6 +176,15 @@ bool addFile(
 
     QString filename = fileInfo.fileName();
     qint64 fileSize = fileInfo.size();
+
+    QString fileSha256 =
+        calculateFileSha256(sourcePath);
+
+    if (fileSha256.isEmpty())
+    {
+        qDebug() << "Calculate file SHA-256 failed.";
+        return false;
+    }
 
     QString userStorageDir =
         "data/files/" + owner;
@@ -271,12 +294,13 @@ bool addFile(
         "INSERT INTO file_versions "
         "(file_id, version_number, size, path, sha256, "
         "upload_time, is_complete) "
-        "VALUES (?, 1, ?, ?, NULL, ?, 1)"
+        "VALUES (?, 1, ?, ?, ?, ?, 1)"
     );
 
     insertVersionQuery.addBindValue(fileId);
     insertVersionQuery.addBindValue(fileSize);
     insertVersionQuery.addBindValue(targetPath);
+    insertVersionQuery.addBindValue(fileSha256);
     insertVersionQuery.addBindValue(uploadTime);
 
     if (!insertVersionQuery.exec())
@@ -562,7 +586,6 @@ bool deleteFile(QSqlDatabase& db,
 
         return false;
     }
-
 
     qDebug() << "File deleted successfully:"
         << filename;
@@ -884,6 +907,14 @@ bool addFileVersion(
 
         return false;
     }
+    QString fileSha256 =
+        calculateFileSha256(sourcePath);
+
+    if (fileSha256.isEmpty())
+    {
+        qDebug() << "Calculate version SHA-256 failed.";
+        return false;
+    }
 
     // 查询逻辑文件，并验证所有者
     QSqlQuery fileQuery(db);
@@ -1008,13 +1039,14 @@ bool addFileVersion(
         "INSERT INTO file_versions "
         "(file_id, version_number, size, path, sha256, "
         "upload_time, is_complete) "
-        "VALUES (?, ?, ?, ?, NULL, ?, 1)"
+        "VALUES (?, ?, ?, ?, ?, ?, 1)"
     );
 
     insertQuery.addBindValue(fileId);
     insertQuery.addBindValue(nextVersion);
     insertQuery.addBindValue(fileSize);
     insertQuery.addBindValue(targetPath);
+    insertQuery.addBindValue(fileSha256);
     insertQuery.addBindValue(uploadTime);
 
     if (!insertQuery.exec())
@@ -1313,6 +1345,425 @@ bool deleteFileVersion(
     qDebug() << "File version deleted successfully!";
     qDebug() << "File ID:" << fileId;
     qDebug() << "Deleted version:" << versionNumber;
+
+    return true;
+}
+
+// =====================================================
+// 13. 计算文件的SHA-256值
+// =====================================================
+QString calculateFileSha256(
+    const QString& filePath)
+{
+    QFile file(filePath);
+
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        qDebug() << "Open file for SHA-256 failed:"
+            << filePath;
+
+        return "";
+    }
+
+    QCryptographicHash hash(
+        QCryptographicHash::Sha256
+    );
+
+    const qint64 bufferSize =
+        1024 * 1024;
+
+    while (!file.atEnd())
+    {
+        QByteArray data =
+            file.read(bufferSize);
+
+        if (data.isEmpty() &&
+            file.error() != QFile::NoError)
+        {
+            qDebug() << "Read file for SHA-256 failed:"
+                << file.errorString();
+
+            return "";
+        }
+
+        hash.addData(data);
+    }
+
+    QString sha256 =
+        QString::fromLatin1(
+            hash.result().toHex()
+        );
+
+    qDebug() << "SHA-256 calculated successfully:";
+    qDebug() << sha256;
+
+    return sha256;
+}
+
+// =====================================================
+// 14. 为旧版本自动补齐SHA-256
+// =====================================================
+static bool backfillMissingSha256(
+    QSqlDatabase& db)
+{
+    QSqlQuery selectQuery(db);
+
+    if (!selectQuery.exec(
+        "SELECT id, path "
+        "FROM file_versions "
+        "WHERE sha256 IS NULL OR sha256 = ''"))
+    {
+        qDebug() << "Query missing SHA-256 failed:"
+            << selectQuery.lastError().text();
+
+        return false;
+    }
+
+    QList<QPair<int, QString>> versionFiles;
+
+    while (selectQuery.next())
+    {
+        versionFiles.append(
+            qMakePair(
+                selectQuery.value("id").toInt(),
+                selectQuery.value("path").toString()
+            )
+        );
+    }
+
+    int updatedCount = 0;
+
+    for (const auto& versionFile : versionFiles)
+    {
+        int versionId = versionFile.first;
+        QString versionPath = versionFile.second;
+
+        QString sha256 =
+            calculateFileSha256(versionPath);
+
+        if (sha256.isEmpty())
+        {
+            qDebug() << "Skip missing or unreadable version:"
+                << versionPath;
+
+            continue;
+        }
+
+        QSqlQuery updateQuery(db);
+
+        updateQuery.prepare(
+            "UPDATE file_versions "
+            "SET sha256 = ? "
+            "WHERE id = ?"
+        );
+
+        updateQuery.addBindValue(sha256);
+        updateQuery.addBindValue(versionId);
+
+        if (!updateQuery.exec())
+        {
+            qDebug() << "Update SHA-256 failed:"
+                << updateQuery.lastError().text();
+
+            return false;
+        }
+
+        ++updatedCount;
+    }
+
+    qDebug() << "Missing SHA-256 records updated:"
+        << updatedCount;
+
+    return true;
+}
+
+// =====================================================
+// 15. 根据SHA-256查找服务器已有文件
+// =====================================================
+QString findFilePathBySha256(
+    QSqlDatabase& db,
+    const QString& sha256)
+{
+    QString normalizedSha256 =
+        sha256.trimmed().toLower();
+
+    if (normalizedSha256.length() != 64)
+    {
+        qDebug() << "Invalid SHA-256 value.";
+        return "";
+    }
+
+    QSqlQuery query(db);
+
+    query.prepare(
+        "SELECT path "
+        "FROM file_versions "
+        "WHERE sha256 = ? "
+        "AND is_complete = 1 "
+        "ORDER BY id ASC"
+    );
+
+    query.addBindValue(normalizedSha256);
+
+    if (!query.exec())
+    {
+        qDebug() << "Find duplicate file failed:"
+            << query.lastError().text();
+
+        return "";
+    }
+
+    while (query.next())
+    {
+        QString existingPath =
+            query.value("path").toString();
+
+        // 跳过数据库中存在、但磁盘文件已丢失的异常记录
+        if (QFile::exists(existingPath))
+        {
+            qDebug() << "Duplicate file found:";
+            qDebug() << existingPath;
+
+            return existingPath;
+        }
+    }
+
+    qDebug() << "No duplicate file found.";
+    return "";
+}
+
+// =====================================================
+// 16. 根据SHA-256完成基础秒传
+// =====================================================
+bool instantUploadFile(
+    QSqlDatabase& db,
+    const QString& filename,
+    const QString& sha256,
+    const QString& owner)
+{
+    if (owner.isEmpty() ||
+        owner.contains("/") ||
+        owner.contains("\\"))
+    {
+        qDebug() << "Invalid owner.";
+        return false;
+    }
+
+    if (filename.isEmpty() ||
+        filename.contains("/") ||
+        filename.contains("\\"))
+    {
+        qDebug() << "Invalid filename.";
+        return false;
+    }
+
+    QString normalizedSha256 =
+        sha256.trimmed().toLower();
+
+    if (normalizedSha256.length() != 64)
+    {
+        qDebug() << "Invalid SHA-256 value.";
+        return false;
+    }
+
+    // 查找服务器中已经存在的相同内容
+    QString existingPath =
+        findFilePathBySha256(
+            db,
+            normalizedSha256
+        );
+
+    if (existingPath.isEmpty())
+    {
+        qDebug() << "Instant upload unavailable:"
+            << "matching content was not found.";
+
+        return false;
+    }
+
+    QFileInfo existingInfo(existingPath);
+
+    if (!existingInfo.exists() ||
+        !existingInfo.isFile())
+    {
+        qDebug() << "Existing physical file is unavailable.";
+        return false;
+    }
+
+    // 同一用户不能存在同名逻辑文件
+    QSqlQuery duplicateQuery(db);
+
+    duplicateQuery.prepare(
+        "SELECT id "
+        "FROM files "
+        "WHERE filename = ? AND owner = ?"
+    );
+
+    duplicateQuery.addBindValue(filename);
+    duplicateQuery.addBindValue(owner);
+
+    if (!duplicateQuery.exec())
+    {
+        qDebug() << "Check instant-upload duplicate failed:"
+            << duplicateQuery.lastError().text();
+
+        return false;
+    }
+
+    if (duplicateQuery.next())
+    {
+        qDebug() << "File already exists for this user:"
+            << filename;
+
+        return false;
+    }
+
+    qint64 fileSize =
+        existingInfo.size();
+
+    QString uploadTime =
+        QDateTime::currentDateTime()
+        .toString("yyyy-MM-dd HH:mm:ss");
+
+    if (!db.transaction())
+    {
+        qDebug() << "Start instant-upload transaction failed.";
+        return false;
+    }
+
+    // 先建立逻辑文件记录以获得fileId
+    QSqlQuery insertFileQuery(db);
+
+    insertFileQuery.prepare(
+        "INSERT INTO files "
+        "(filename, size, owner, path, upload_time) "
+        "VALUES (?, ?, ?, '', ?)"
+    );
+
+    insertFileQuery.addBindValue(filename);
+    insertFileQuery.addBindValue(fileSize);
+    insertFileQuery.addBindValue(owner);
+    insertFileQuery.addBindValue(uploadTime);
+
+    if (!insertFileQuery.exec())
+    {
+        qDebug() << "Insert instant-upload file failed:"
+            << insertFileQuery.lastError().text();
+
+        db.rollback();
+        return false;
+    }
+
+    int fileId =
+        insertFileQuery.lastInsertId().toInt();
+
+    QString versionDirectory =
+        "data/files/" +
+        owner +
+        "/" +
+        QString::number(fileId);
+
+    QDir dir;
+
+    if (!dir.exists(versionDirectory) &&
+        !dir.mkpath(versionDirectory))
+    {
+        qDebug() << "Create instant-upload directory failed:"
+            << versionDirectory;
+
+        db.rollback();
+        return false;
+    }
+
+    QString targetPath =
+        versionDirectory +
+        "/v1_" +
+        filename;
+
+    if (QFile::exists(targetPath))
+    {
+        qDebug() << "Instant-upload target already exists:"
+            << targetPath;
+
+        db.rollback();
+        return false;
+    }
+
+    // 服务器内部复制，无需客户端重新传输文件内容
+    if (!QFile::copy(existingPath, targetPath))
+    {
+        qDebug() << "Server-side instant copy failed.";
+
+        db.rollback();
+        return false;
+    }
+
+    QSqlQuery updateFileQuery(db);
+
+    updateFileQuery.prepare(
+        "UPDATE files "
+        "SET path = ? "
+        "WHERE id = ? AND owner = ?"
+    );
+
+    updateFileQuery.addBindValue(targetPath);
+    updateFileQuery.addBindValue(fileId);
+    updateFileQuery.addBindValue(owner);
+
+    if (!updateFileQuery.exec() ||
+        updateFileQuery.numRowsAffected() != 1)
+    {
+        qDebug() << "Update instant-upload path failed:"
+            << updateFileQuery.lastError().text();
+
+        db.rollback();
+        QFile::remove(targetPath);
+
+        return false;
+    }
+
+    QSqlQuery insertVersionQuery(db);
+
+    insertVersionQuery.prepare(
+        "INSERT INTO file_versions "
+        "(file_id, version_number, size, path, sha256, "
+        "upload_time, is_complete) "
+        "VALUES (?, 1, ?, ?, ?, ?, 1)"
+    );
+
+    insertVersionQuery.addBindValue(fileId);
+    insertVersionQuery.addBindValue(fileSize);
+    insertVersionQuery.addBindValue(targetPath);
+    insertVersionQuery.addBindValue(normalizedSha256);
+    insertVersionQuery.addBindValue(uploadTime);
+
+    if (!insertVersionQuery.exec())
+    {
+        qDebug() << "Insert instant-upload version failed:"
+            << insertVersionQuery.lastError().text();
+
+        db.rollback();
+        QFile::remove(targetPath);
+
+        return false;
+    }
+
+    if (!db.commit())
+    {
+        qDebug() << "Commit instant upload failed:"
+            << db.lastError().text();
+
+        db.rollback();
+        QFile::remove(targetPath);
+
+        return false;
+    }
+
+    qDebug() << "Instant upload completed successfully!";
+    qDebug() << "File ID:" << fileId;
+    qDebug() << "Filename:" << filename;
+    qDebug() << "SHA-256:" << normalizedSha256;
+    qDebug() << "Path:" << targetPath;
 
     return true;
 }
