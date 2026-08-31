@@ -27,6 +27,35 @@ static bool recoverInterruptedDeletions(
     QSqlDatabase& db
 );
 
+static bool isValidSha256Value(
+    const QString& sha256)
+{
+    const QString normalizedSha256 =
+        sha256.trimmed().toLower();
+
+    if (normalizedSha256.length() != 64)
+    {
+        return false;
+    }
+
+    for (const QChar character :
+    normalizedSha256)
+    {
+        const bool isValidCharacter =
+            (character >= '0' &&
+                character <= '9') ||
+            (character >= 'a' &&
+                character <= 'f');
+
+        if (!isValidCharacter)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 // =====================================================
 // 1. 初始化数据库
 // =====================================================
@@ -370,25 +399,8 @@ bool addUploadedFile(
     const QString normalizedClientSha256 =
         clientSha256.trimmed().toLower();
 
-    bool isHashFormatValid =
-        normalizedClientSha256.length() == 64;
-
-    for (const QChar character :
-    normalizedClientSha256)
-    {
-        const bool isHexadecimalCharacter =
-            character.isDigit() ||
-            (character >= 'a' &&
-                character <= 'f');
-
-        if (!isHexadecimalCharacter)
-        {
-            isHashFormatValid = false;
-            break;
-        }
-    }
-
-    if (!isHashFormatValid)
+    if (!isValidSha256Value(
+        normalizedClientSha256))
     {
         qDebug() << "Invalid client SHA-256 format.";
 
@@ -1765,10 +1777,10 @@ QString findFilePathBySha256(
     QSqlDatabase& db,
     const QString& sha256)
 {
-    QString normalizedSha256 =
+    const QString normalizedSha256 =
         sha256.trimmed().toLower();
 
-    if (normalizedSha256.length() != 64)
+    if (!isValidSha256Value(normalizedSha256))
     {
         qDebug() << "Invalid SHA-256 value.";
         return "";
@@ -1794,22 +1806,65 @@ QString findFilePathBySha256(
         return "";
     }
 
+    QStringList candidatePaths;
+
     while (query.next())
     {
-        QString existingPath =
-            query.value("path").toString();
+        candidatePaths.append(
+            query.value("path").toString()
+        );
+    }
 
-        // 跳过数据库中存在、但磁盘文件已丢失的异常记录
-        if (QFile::exists(existingPath))
+    query.finish();
+
+    for (const QString& existingPath :
+        candidatePaths)
+    {
+        bool isPhysicalFileValid =
+            QFile::exists(existingPath);
+
+        if (isPhysicalFileValid)
         {
-            qDebug() << "Duplicate file found:";
+            const QString actualSha256 =
+                calculateFileSha256(existingPath)
+                .toLower();
+
+            isPhysicalFileValid =
+                !actualSha256.isEmpty() &&
+                actualSha256 ==
+                normalizedSha256;
+        }
+
+        if (isPhysicalFileValid)
+        {
+            qDebug() << "Verified duplicate file found:";
             qDebug() << existingPath;
 
             return existingPath;
         }
+
+        // 文件丢失或内容损坏，将对应版本标记为不完整
+        QSqlQuery invalidateQuery(db);
+
+        invalidateQuery.prepare(
+            "UPDATE file_versions "
+            "SET is_complete = 0 "
+            "WHERE path = ?"
+        );
+
+        invalidateQuery.addBindValue(existingPath);
+
+        if (!invalidateQuery.exec())
+        {
+            qDebug() << "Invalidate damaged file failed:"
+                << invalidateQuery.lastError().text();
+        }
+
+        qDebug() << "Damaged duplicate candidate rejected:"
+            << existingPath;
     }
 
-    qDebug() << "No duplicate file found.";
+    qDebug() << "No verified duplicate file found.";
     return "";
 }
 
@@ -1841,7 +1896,7 @@ bool instantUploadFile(
     QString normalizedSha256 =
         sha256.trimmed().toLower();
 
-    if (normalizedSha256.length() != 64)
+    if (!isValidSha256Value(normalizedSha256))
     {
         qDebug() << "Invalid SHA-256 value.";
         return false;
