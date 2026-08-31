@@ -350,6 +350,105 @@ bool addFile(
     return true;
 }
 
+bool addUploadedFile(
+    QSqlDatabase& db,
+    const QString& temporaryFilePath,
+    const QString& owner,
+    const QString& clientSha256)
+{
+    QFileInfo fileInfo(temporaryFilePath);
+
+    if (!fileInfo.exists() ||
+        !fileInfo.isFile())
+    {
+        qDebug() << "Temporary upload file does not exist:"
+            << temporaryFilePath;
+
+        return false;
+    }
+
+    const QString normalizedClientSha256 =
+        clientSha256.trimmed().toLower();
+
+    bool isHashFormatValid =
+        normalizedClientSha256.length() == 64;
+
+    for (const QChar character :
+    normalizedClientSha256)
+    {
+        const bool isHexadecimalCharacter =
+            character.isDigit() ||
+            (character >= 'a' &&
+                character <= 'f');
+
+        if (!isHexadecimalCharacter)
+        {
+            isHashFormatValid = false;
+            break;
+        }
+    }
+
+    if (!isHashFormatValid)
+    {
+        qDebug() << "Invalid client SHA-256 format.";
+
+        if (!QFile::remove(temporaryFilePath))
+        {
+            qDebug() << "Failed to remove invalid upload file:"
+                << temporaryFilePath;
+        }
+
+        return false;
+    }
+
+    const QString serverSha256 =
+        calculateFileSha256(temporaryFilePath)
+        .toLower();
+
+    if (serverSha256.isEmpty())
+    {
+        qDebug() << "Calculate uploaded file SHA-256 failed.";
+
+        QFile::remove(temporaryFilePath);
+        return false;
+    }
+
+    if (serverSha256 != normalizedClientSha256)
+    {
+        qDebug() << "Uploaded file SHA-256 mismatch.";
+        qDebug() << "Client SHA-256:"
+            << normalizedClientSha256;
+        qDebug() << "Server SHA-256:"
+            << serverSha256;
+
+        if (!QFile::remove(temporaryFilePath))
+        {
+            qDebug() << "Failed to remove corrupted upload file:"
+                << temporaryFilePath;
+        }
+
+        return false;
+    }
+
+    qDebug() << "Uploaded file SHA-256 verified.";
+
+    const bool isFileAdded =
+        addFile(
+            db,
+            temporaryFilePath,
+            owner
+        );
+
+    // addFile会复制到正式存储目录，因此临时文件不再需要
+    if (!QFile::remove(temporaryFilePath))
+    {
+        qDebug() << "Warning: failed to clean temporary upload file:"
+            << temporaryFilePath;
+    }
+
+    return isFileAdded;
+}
+
 // =====================================================
 // 4. 查询某个用户的文件列表
 // =====================================================

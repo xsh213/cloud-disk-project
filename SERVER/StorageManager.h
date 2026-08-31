@@ -20,6 +20,14 @@ bool addFile(
     const QString& sourcePath,
     const QString& owner
 );
+// 校验上传文件的SHA-256并完成入库
+// temporaryFilePath必须是服务器接收完成后的临时文件
+bool addUploadedFile(
+    QSqlDatabase& db,
+    const QString& temporaryFilePath,
+    const QString& owner,
+    const QString& clientSha256
+);
 
 // 查询指定用户的文件列表
 void listFiles(
