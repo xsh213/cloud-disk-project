@@ -57,6 +57,21 @@ QString getFilePath(
     const QString& owner
 );
 
+// 获取文件最新版本的SHA-256
+QString getFileSha256(
+    QSqlDatabase& db,
+    int fileId,
+    const QString& owner
+);
+
+// 获取指定历史版本的SHA-256
+QString getFileVersionSha256(
+    QSqlDatabase& db,
+    int fileId,
+    int versionNumber,
+    const QString& owner
+);
+
 // 查询文件的全部历史版本
 void listFileVersions(
     QSqlDatabase& db,

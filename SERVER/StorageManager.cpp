@@ -978,6 +978,117 @@ QString getFilePath(QSqlDatabase& db,
     return filePath;
 }
 
+QString getFileSha256(
+    QSqlDatabase& db,
+    int fileId,
+    const QString& owner)
+{
+    QSqlQuery query(db);
+
+    query.prepare(
+        "SELECT v.sha256 "
+        "FROM files f "
+        "INNER JOIN file_versions v "
+        "ON v.file_id = f.id "
+        "AND v.path = f.path "
+        "WHERE f.id = ? "
+        "AND f.owner = ? "
+        "AND v.is_complete = 1 "
+        "LIMIT 1"
+    );
+
+    query.addBindValue(fileId);
+    query.addBindValue(owner);
+
+    if (!query.exec())
+    {
+        qDebug() << "Get file SHA-256 failed:"
+            << query.lastError().text();
+
+        return "";
+    }
+
+    if (!query.next())
+    {
+        qDebug() << "File not found or permission denied.";
+
+        return "";
+    }
+
+    const QString sha256 =
+        query.value("sha256")
+        .toString()
+        .trimmed()
+        .toLower();
+
+    if (sha256.isEmpty())
+    {
+        qDebug() << "File SHA-256 is missing.";
+        return "";
+    }
+
+    return sha256;
+}
+QString getFileVersionSha256(
+    QSqlDatabase& db,
+    int fileId,
+    int versionNumber,
+    const QString& owner)
+{
+    if (versionNumber <= 0)
+    {
+        qDebug() << "Invalid version number.";
+        return "";
+    }
+
+    QSqlQuery query(db);
+
+    query.prepare(
+        "SELECT v.sha256 "
+        "FROM file_versions v "
+        "INNER JOIN files f "
+        "ON v.file_id = f.id "
+        "WHERE v.file_id = ? "
+        "AND v.version_number = ? "
+        "AND f.owner = ? "
+        "AND v.is_complete = 1 "
+        "LIMIT 1"
+    );
+
+    query.addBindValue(fileId);
+    query.addBindValue(versionNumber);
+    query.addBindValue(owner);
+
+    if (!query.exec())
+    {
+        qDebug() << "Get file version SHA-256 failed:"
+            << query.lastError().text();
+
+        return "";
+    }
+
+    if (!query.next())
+    {
+        qDebug() << "File version not found or permission denied.";
+
+        return "";
+    }
+
+    const QString sha256 =
+        query.value("sha256")
+        .toString()
+        .trimmed()
+        .toLower();
+
+    if (sha256.isEmpty())
+    {
+        qDebug() << "File version SHA-256 is missing.";
+        return "";
+    }
+
+    return sha256;
+}
+
 // =====================================================
 // 8. 查询文件的全部历史版本
 // =====================================================
