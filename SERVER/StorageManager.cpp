@@ -1398,6 +1398,89 @@ bool addFileVersion(
 
     return true;
 }
+bool addUploadedFileVersion(
+    QSqlDatabase& db,
+    int fileId,
+    const QString& temporaryFilePath,
+    const QString& owner,
+    const QString& clientSha256)
+{
+    QFileInfo fileInfo(temporaryFilePath);
+
+    if (!fileInfo.exists() ||
+        !fileInfo.isFile())
+    {
+        qDebug() << "Temporary version file does not exist:"
+            << temporaryFilePath;
+
+        return false;
+    }
+
+    const QString normalizedClientSha256 =
+        clientSha256.trimmed().toLower();
+
+    if (!isValidSha256Value(
+        normalizedClientSha256))
+    {
+        qDebug() << "Invalid client version SHA-256 format.";
+
+        if (!QFile::remove(temporaryFilePath))
+        {
+            qDebug() << "Failed to remove invalid version file:"
+                << temporaryFilePath;
+        }
+
+        return false;
+    }
+
+    const QString serverSha256 =
+        calculateFileSha256(temporaryFilePath)
+        .toLower();
+
+    if (serverSha256.isEmpty())
+    {
+        qDebug() << "Calculate uploaded version SHA-256 failed.";
+
+        QFile::remove(temporaryFilePath);
+        return false;
+    }
+
+    if (serverSha256 != normalizedClientSha256)
+    {
+        qDebug() << "Uploaded version SHA-256 mismatch.";
+        qDebug() << "Client SHA-256:"
+            << normalizedClientSha256;
+        qDebug() << "Server SHA-256:"
+            << serverSha256;
+
+        if (!QFile::remove(temporaryFilePath))
+        {
+            qDebug() << "Failed to remove corrupted version file:"
+                << temporaryFilePath;
+        }
+
+        return false;
+    }
+
+    qDebug() << "Uploaded version SHA-256 verified.";
+
+    const bool isVersionAdded =
+        addFileVersion(
+            db,
+            fileId,
+            temporaryFilePath,
+            owner
+        );
+
+    // addFileVersion会复制到正式版本目录
+    if (!QFile::remove(temporaryFilePath))
+    {
+        qDebug() << "Warning: failed to clean temporary version file:"
+            << temporaryFilePath;
+    }
+
+    return isVersionAdded;
+}
 
 // =====================================================
 // 10. 获取指定历史版本的真实存储路径

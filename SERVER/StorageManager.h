@@ -86,6 +86,14 @@ bool addFileVersion(
     const QString& sourcePath,
     const QString& owner
 );
+// 校验上传的新版本SHA-256并完成入库
+bool addUploadedFileVersion(
+    QSqlDatabase& db,
+    int fileId,
+    const QString& temporaryFilePath,
+    const QString& owner,
+    const QString& clientSha256
+);
 
 // 获取指定历史版本的真实存储路径
 QString getFileVersionPath(
