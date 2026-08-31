@@ -248,6 +248,35 @@ listFileVersions(
 
     QTcpServer tcpServer;
 
+    // -------------------------------------------------
+// 一次性测试：SHA-256秒传
+// 成功运行一次后必须注释
+// -------------------------------------------------
+    /*
+    QString testSha256 =
+        "58055843f8f14fb4decc09feb0e6ed43e8d81c7fcafa6d86fb209e672b2592fb";
+
+    bool instantSuccess = instantUploadFile(
+        db,
+        "sizheng_instant_copy.pdf",
+        testSha256,
+        currentUser
+    );
+
+    if (instantSuccess)
+    {
+        qDebug() << "Instant upload test succeeded!";
+    }
+    else
+    {
+        qDebug() << "Instant upload test failed!";
+    }
+
+    listFiles(
+        db,
+        currentUser
+    );*/
+
     if (!tcpServer.listen(QHostAddress::AnyIPv4, 8888))
     {
         qDebug() << "Server startup failed:"
@@ -264,4 +293,4 @@ listFileVersions(
 
     db.close();
     return exitCode;
-}
+    }
