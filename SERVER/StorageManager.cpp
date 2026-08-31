@@ -1,4 +1,4 @@
-#include "StorageManager.h"
+Ôªø#include "StorageManager.h"
 
 #include <QSqlQuery>
 #include <QSqlError>
@@ -11,6 +11,10 @@
 #include <QCryptographicHash>
 #include <QList>
 #include <QPair>
+#include <QSet>
+#include <QVector>
+#include <QUuid>
+#include <QDirIterator>
 
 namespace netdisk
 {
@@ -19,9 +23,12 @@ namespace netdisk
 static bool backfillMissingSha256(
     QSqlDatabase& db
 );
+static bool recoverInterruptedDeletions(
+    QSqlDatabase& db
+);
 
 // =====================================================
-// 1. ≥ı ºªØ ˝æ›ø‚
+// 1. ÂàùÂßãÂåñÊï∞ÊçÆÂ∫ì
 // =====================================================
 bool initDatabase(QSqlDatabase& db)
 {
@@ -40,7 +47,7 @@ bool initDatabase(QSqlDatabase& db)
 
     QSqlQuery query(db);
 
-    // ø™∆ÙSQLiteÕ‚º¸‘º ¯
+    // ÂºÄÂêØSQLiteÂ§ñÈîÆÁ∫¶Êùü
     if (!query.exec("PRAGMA foreign_keys = ON"))
     {
         qDebug() << "Enable foreign keys failed:"
@@ -49,7 +56,7 @@ bool initDatabase(QSqlDatabase& db)
         return false;
     }
 
-    // ¬ﬂº≠Œƒº˛±Ì
+    // ÈÄªËæëÊñá‰ª∂Ë°®
     QString filesTableSql =
         "CREATE TABLE IF NOT EXISTS files ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -70,7 +77,7 @@ bool initDatabase(QSqlDatabase& db)
 
     qDebug() << "files table ready!";
 
-    // Œƒº˛¿˙ ∑∞Ê±æ±Ì
+    // Êñá‰ª∂ÂéÜÂè≤ÁâàÊú¨Ë°®
     QString versionsTableSql =
         "CREATE TABLE IF NOT EXISTS file_versions ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -95,7 +102,7 @@ bool initDatabase(QSqlDatabase& db)
 
     qDebug() << "file_versions table ready!";
 
-    // Ω´æ…files±Ì÷–µƒœ÷”–Œƒº˛◊‘∂Øµ«º«Œ™v1
+    // Â∞ÜÊóßfilesË°®‰∏≠ÁöÑÁé∞ÊúâÊñá‰ª∂Ëá™Âä®ÁôªËÆ∞‰∏∫v1
     QString migrateSql =
         "INSERT OR IGNORE INTO file_versions "
         "(file_id, version_number, size, path, sha256, "
@@ -113,6 +120,14 @@ bool initDatabase(QSqlDatabase& db)
 
     qDebug() << "Existing files migrated to version 1!";
 
+    // ÂÖàÊÅ¢Â§çÂºÇÂ∏∏‰∏≠Êñ≠ÁöÑÂà†Èô§Êìç‰Ωú
+    if (!recoverInterruptedDeletions(db))
+    {
+        qDebug() << "Interrupted deletion recovery failed.";
+        return false;
+    }
+
+    // ÊÅ¢Â§çÂÆåÊàêÂêéÔºåÂÜçË°•ÈΩêÁº∫Â§±ÁöÑSHA-256
     if (!backfillMissingSha256(db))
     {
         qDebug() << "Backfill missing SHA-256 failed.";
@@ -120,13 +135,10 @@ bool initDatabase(QSqlDatabase& db)
     }
 
     return true;
-
-    return true;
 }
 
-
 // =====================================================
-// 2. ≥ı ºªØ∑˛ŒÒ∆˜◊‹¥Ê¥¢ƒø¬º
+// 2. ÂàùÂßãÂåñÊúçÂä°Âô®ÊÄªÂ≠òÂÇ®ÁõÆÂΩï
 // =====================================================
 bool initStorageDirectory()
 {
@@ -134,7 +146,7 @@ bool initStorageDirectory()
 
     QDir dir;
 
-    // »Áπ˚ƒø¬º≤ª¥Ê‘⁄£¨‘Ú◊‘∂Ø¥¥Ω®
+    // Â¶ÇÊûúÁõÆÂΩï‰∏çÂ≠òÂú®ÔºåÂàôËá™Âä®ÂàõÂª∫
     if (!dir.exists(storageDir))
     {
         if (!dir.mkpath(storageDir))
@@ -153,14 +165,14 @@ bool initStorageDirectory()
 
 
 // =====================================================
-// 3. ÃÌº”Œƒº˛
+// 3. Ê∑ªÂä†Êñá‰ª∂
 // =====================================================
 bool addFile(
     QSqlDatabase& db,
     const QString& sourcePath,
     const QString& owner)
 {
-    // ºÏ≤È”√ªß√˚£¨∑¿÷π…˙≥…∑«∑®¥Ê¥¢¬∑æ∂
+    // Ê£ÄÊü•Áî®Êà∑ÂêçÔºåÈò≤Ê≠¢ÁîüÊàêÈùûÊ≥ïÂ≠òÂÇ®Ë∑ØÂæÑ
     if (owner.isEmpty() ||
         owner.contains("/") ||
         owner.contains("\\"))
@@ -208,7 +220,7 @@ bool addFile(
     QString targetPath =
         userStorageDir + "/" + filename;
 
-    // ºÏ≤È ˝æ›ø‚÷– «∑Ò¥Ê‘⁄Õ¨√˚Œƒº˛
+    // Ê£ÄÊü•Êï∞ÊçÆÂ∫ì‰∏≠ÊòØÂê¶Â≠òÂú®ÂêåÂêçÊñá‰ª∂
     QSqlQuery checkQuery(db);
 
     checkQuery.prepare(
@@ -244,7 +256,7 @@ bool addFile(
         return false;
     }
 
-    // œ»∏¥÷∆’Ê µŒƒº˛
+    // ÂÖàÂ§çÂà∂ÁúüÂÆûÊñá‰ª∂
     if (!QFile::copy(sourcePath, targetPath))
     {
         qDebug() << "Failed to copy file.";
@@ -255,7 +267,7 @@ bool addFile(
         QDateTime::currentDateTime()
         .toString("yyyy-MM-dd HH:mm:ss");
 
-    // files∫Õfile_versions±ÿ–ÎÕ¨ ±–¥»Î≥…π¶
+    // filesÂíåfile_versionsÂøÖÈ°ªÂêåÊó∂ÂÜôÂÖ•ÊàêÂäü
     if (!db.transaction())
     {
         qDebug() << "Failed to start add-file transaction.";
@@ -292,7 +304,7 @@ bool addFile(
     int fileId =
         insertFileQuery.lastInsertId().toInt();
 
-    // –¬Œƒº˛¡¢º¥µ«º«Œ™∞Ê±æ1£¨≤ª–Ë“™÷ÿ∆Ù∑˛ŒÒ∆˜
+    // Êñ∞Êñá‰ª∂Á´ãÂç≥ÁôªËÆ∞‰∏∫ÁâàÊú¨1Ôºå‰∏çÈúÄË¶ÅÈáçÂêØÊúçÂä°Âô®
     QSqlQuery insertVersionQuery(db);
 
     insertVersionQuery.prepare(
@@ -339,7 +351,7 @@ bool addFile(
 }
 
 // =====================================================
-// 4. ≤È—Øƒ≥∏ˆ”√ªßµƒŒƒº˛¡–±Ì
+// 4. Êü•ËØ¢Êüê‰∏™Áî®Êà∑ÁöÑÊñá‰ª∂ÂàóË°®
 // =====================================================
 void listFiles(QSqlDatabase& db,
     const QString& owner)
@@ -420,17 +432,55 @@ void listFiles(QSqlDatabase& db,
 
 
 // =====================================================
-// 5. …æ≥˝Œƒº˛
+// 5. Âà†Èô§Êñá‰ª∂
 // =====================================================
-bool deleteFile(QSqlDatabase& db,
+bool deleteFile(
+    QSqlDatabase& db,
     int fileId,
     const QString& owner)
 {
-    // -------------------------------------------------
-    // ≤È—Ø÷∏∂®Œƒº˛
-    // -------------------------------------------------
-    QSqlQuery findQuery(db);
+    struct RenamedFile
+    {
+        QString originalPath;
+        QString temporaryPath;
+    };
 
+    QVector<RenamedFile> renamedFiles;
+
+    auto restoreRenamedFiles = [&renamedFiles]()
+        {
+            bool isRestoreSuccessful = true;
+
+            for (int i = renamedFiles.size() - 1; i >= 0; --i)
+            {
+                const RenamedFile& renamedFile =
+                    renamedFiles.at(i);
+
+                if (QFile::exists(renamedFile.temporaryPath) &&
+                    !QFile::rename(
+                        renamedFile.temporaryPath,
+                        renamedFile.originalPath))
+                {
+                    qDebug() << "Failed to restore file:"
+                        << renamedFile.temporaryPath;
+
+                    isRestoreSuccessful = false;
+                }
+            }
+
+            return isRestoreSuccessful;
+        };
+
+    if (!db.transaction())
+    {
+        qDebug() << "Failed to start database transaction:"
+            << db.lastError().text();
+
+        return false;
+    }
+
+    // Êü•ËØ¢Êñá‰ª∂ÔºåÂπ∂ÂêåÊó∂È™åËØÅÁî®Êà∑ÊùÉÈôê
+    QSqlQuery findQuery(db);
 
     findQuery.prepare(
         "SELECT filename, path "
@@ -438,170 +488,186 @@ bool deleteFile(QSqlDatabase& db,
         "WHERE id = ? AND owner = ?"
     );
 
-
     findQuery.addBindValue(fileId);
     findQuery.addBindValue(owner);
-
 
     if (!findQuery.exec())
     {
         qDebug() << "Find file failed:"
             << findQuery.lastError().text();
 
+        db.rollback();
         return false;
     }
 
-
-    // Œƒº˛≤ª¥Ê‘⁄ªÚ≤ª Ù”⁄µ±«∞”√ªß
     if (!findQuery.next())
     {
         qDebug() << "File not found or permission denied.";
 
+        db.rollback();
         return false;
     }
 
-
-    QString filename =
+    const QString filename =
         findQuery.value("filename").toString();
 
+    // ‰ΩøÁî®ÈõÜÂêà‰øùÂ≠òË∑ØÂæÑÔºåÈò≤Ê≠¢ÊúÄÊñ∞ÁâàÊú¨Ë∑ØÂæÑË¢´ÈáçÂ§çÂ§ÑÁêÜ
+    QSet<QString> physicalPaths;
 
-    QString filePath =
+    const QString latestPath =
         findQuery.value("path").toString();
 
-
-    // -------------------------------------------------
-    // ºÏ≤È’Ê µŒƒº˛ «∑Ò¥Ê‘⁄
-    // -------------------------------------------------
-    if (!QFile::exists(filePath))
+    if (!latestPath.isEmpty())
     {
-        qDebug() << "Physical file does not exist:"
-            << filePath;
+        physicalPaths.insert(latestPath);
+    }
 
+    // Êü•ËØ¢ËØ•Êñá‰ª∂ÁöÑÂÖ®ÈÉ®ÂéÜÂè≤ÁâàÊú¨Ë∑ØÂæÑ
+    QSqlQuery versionQuery(db);
+
+    versionQuery.prepare(
+        "SELECT path "
+        "FROM file_versions "
+        "WHERE file_id = ?"
+    );
+
+    versionQuery.addBindValue(fileId);
+
+    if (!versionQuery.exec())
+    {
+        qDebug() << "Find file versions failed:"
+            << versionQuery.lastError().text();
+
+        db.rollback();
         return false;
     }
 
-
-    // -------------------------------------------------
-    // ¡Ÿ ±–ﬁ∏ƒŒƒº˛√˚
-    //
-    // ’‚—˘ ˝æ›ø‚…æ≥˝ ß∞‹ ±
-    // ªπƒ‹∞—Œƒº˛ª÷∏¥ªÿ¿¥
-    // -------------------------------------------------
-    QString tempPath =
-        filePath + ".deleting";
-
-
-    if (QFile::exists(tempPath))
+    while (versionQuery.next())
     {
-        QFile::remove(tempPath);
+        const QString versionPath =
+            versionQuery.value("path").toString();
+
+        if (!versionPath.isEmpty())
+        {
+            physicalPaths.insert(versionPath);
+        }
     }
 
-
-    if (!QFile::rename(filePath, tempPath))
+    // ÂÖàÂ∞ÜÊâÄÊúâ‰ªçÂ≠òÂú®ÁöÑÂÆû‰ΩìÊñá‰ª∂‰∏¥Êó∂ÊîπÂêç
+    for (const QString& originalPath : physicalPaths)
     {
-        qDebug() << "Failed to prepare file for deletion.";
+        if (!QFile::exists(originalPath))
+        {
+            qDebug() << "Warning: physical file is missing:"
+                << originalPath;
 
-        return false;
-    }
+            continue;
+        }
 
+        const QString temporaryPath =
+            originalPath +
+            ".deleting." +
+            QUuid::createUuid().toString(
+                QUuid::WithoutBraces
+            );
 
-    // -------------------------------------------------
-    // ø™∆Ù SQLite  ¬ŒÒ
-    // -------------------------------------------------
-    if (!db.transaction())
-    {
-        qDebug() << "Failed to start database transaction.";
+        if (!QFile::rename(
+            originalPath,
+            temporaryPath))
+        {
+            qDebug() << "Failed to prepare file for deletion:"
+                << originalPath;
 
+            restoreRenamedFiles();
+            db.rollback();
+            return false;
+        }
 
-        QFile::rename(
-            tempPath,
-            filePath
+        renamedFiles.append(
+            { originalPath, temporaryPath }
         );
+    }
 
+    // ÊòæÂºèÂà†Èô§ÊâÄÊúâÂéÜÂè≤ÁâàÊú¨ËÆ∞ÂΩï
+    QSqlQuery deleteVersionsQuery(db);
 
+    deleteVersionsQuery.prepare(
+        "DELETE FROM file_versions "
+        "WHERE file_id = ?"
+    );
+
+    deleteVersionsQuery.addBindValue(fileId);
+
+    if (!deleteVersionsQuery.exec())
+    {
+        qDebug() << "Delete file versions failed:"
+            << deleteVersionsQuery.lastError().text();
+
+        db.rollback();
+        restoreRenamedFiles();
         return false;
     }
 
+    // Âà†Èô§ÈÄªËæëÊñá‰ª∂ËÆ∞ÂΩï
+    QSqlQuery deleteFileQuery(db);
 
-    // -------------------------------------------------
-    // …æ≥˝ ˝æ›ø‚º«¬º
-    // -------------------------------------------------
-    QSqlQuery deleteQuery(db);
-
-
-    deleteQuery.prepare(
+    deleteFileQuery.prepare(
         "DELETE FROM files "
         "WHERE id = ? AND owner = ?"
     );
 
+    deleteFileQuery.addBindValue(fileId);
+    deleteFileQuery.addBindValue(owner);
 
-    deleteQuery.addBindValue(fileId);
-    deleteQuery.addBindValue(owner);
-
-
-    if (!deleteQuery.exec())
+    if (!deleteFileQuery.exec() ||
+        deleteFileQuery.numRowsAffected() != 1)
     {
-        qDebug() << "Delete database record failed:"
-            << deleteQuery.lastError().text();
-
+        qDebug() << "Delete file record failed:"
+            << deleteFileQuery.lastError().text();
 
         db.rollback();
-
-
-        QFile::rename(
-            tempPath,
-            filePath
-        );
-
-
+        restoreRenamedFiles();
         return false;
     }
 
-
-    // -------------------------------------------------
-    // Ã·Ωª ˝æ›ø‚ ¬ŒÒ
-    // -------------------------------------------------
     if (!db.commit())
     {
         qDebug() << "Database commit failed:"
             << db.lastError().text();
 
-
         db.rollback();
-
-
-        QFile::rename(
-            tempPath,
-            filePath
-        );
-
-
+        restoreRenamedFiles();
         return false;
     }
 
+    // Êï∞ÊçÆÂ∫ìÊèê‰∫§ÊàêÂäüÂêéÔºåÂÜçÁúüÊ≠£Ê∏ÖÁêÜ‰∏¥Êó∂Êñá‰ª∂
+    bool isCleanupSuccessful = true;
 
-    // -------------------------------------------------
-    // ’Ê’˝…æ≥˝¥≈≈ÃŒƒº˛
-    // -------------------------------------------------
-    if (!QFile::remove(tempPath))
+    for (const RenamedFile& renamedFile : renamedFiles)
     {
-        qDebug() << "Warning: database record deleted,"
-            << "but physical file could not be removed:"
-            << tempPath;
+        if (!QFile::remove(renamedFile.temporaryPath))
+        {
+            qDebug() << "Warning: temporary file cleanup failed:"
+                << renamedFile.temporaryPath;
 
-        return false;
+            isCleanupSuccessful = false;
+        }
     }
 
     qDebug() << "File deleted successfully:"
         << filename;
 
+    if (!isCleanupSuccessful)
+    {
+        qDebug() << "Warning: some temporary files require"
+            << "later cleanup.";
+    }
 
     return true;
 }
 
-
 // =====================================================
-// 6. ÷ÿ√¸√˚Œƒº˛
+// 6. ÈáçÂëΩÂêçÊñá‰ª∂
 // =====================================================
 bool renameFile(QSqlDatabase& db,
     int fileId,
@@ -609,7 +675,7 @@ bool renameFile(QSqlDatabase& db,
     const QString& newFilename)
 {
     // -------------------------------------------------
-    // ºÏ≤È–¬Œƒº˛√˚
+    // Ê£ÄÊü•Êñ∞Êñá‰ª∂Âêç
     // -------------------------------------------------
     if (newFilename.isEmpty())
     {
@@ -620,7 +686,7 @@ bool renameFile(QSqlDatabase& db,
 
 
     // -------------------------------------------------
-    // ∑¿÷π–¬Œƒº˛√˚÷–≥ˆœ÷¬∑æ∂
+    // Èò≤Ê≠¢Êñ∞Êñá‰ª∂Âêç‰∏≠Âá∫Áé∞Ë∑ØÂæÑ
     // -------------------------------------------------
     if (newFilename.contains("/") ||
         newFilename.contains("\\"))
@@ -632,7 +698,7 @@ bool renameFile(QSqlDatabase& db,
 
 
     // -------------------------------------------------
-    // ≤È—Ø‘≠Œƒº˛
+    // Êü•ËØ¢ÂéüÊñá‰ª∂
     // -------------------------------------------------
     QSqlQuery findQuery(db);
 
@@ -674,7 +740,7 @@ bool renameFile(QSqlDatabase& db,
 
 
     // -------------------------------------------------
-    // »Áπ˚–¬æ…Œƒº˛√˚ÕÍ»´œ‡Õ¨
+    // Â¶ÇÊûúÊñ∞ÊóßÊñá‰ª∂ÂêçÂÆåÂÖ®Áõ∏Âêå
     // -------------------------------------------------
     if (oldFilename == newFilename)
     {
@@ -696,7 +762,7 @@ bool renameFile(QSqlDatabase& db,
 
 
     // -------------------------------------------------
-    // ºÏ≤È–¬Œƒº˛√˚ «∑Ò“—æ≠¥Ê‘⁄
+    // Ê£ÄÊü•Êñ∞Êñá‰ª∂ÂêçÊòØÂê¶Â∑≤ÁªèÂ≠òÂú®
     // -------------------------------------------------
     if (QFile::exists(newPath))
     {
@@ -707,7 +773,7 @@ bool renameFile(QSqlDatabase& db,
 
 
     // -------------------------------------------------
-    // œ»–ﬁ∏ƒ’Ê µŒƒº˛√˚
+    // ÂÖà‰øÆÊîπÁúüÂÆûÊñá‰ª∂Âêç
     // -------------------------------------------------
     if (!QFile::rename(oldPath, newPath))
     {
@@ -718,7 +784,7 @@ bool renameFile(QSqlDatabase& db,
 
 
     // -------------------------------------------------
-    // –ﬁ∏ƒ ˝æ›ø‚º«¬º
+    // ‰øÆÊîπÊï∞ÊçÆÂ∫ìËÆ∞ÂΩï
     // -------------------------------------------------
     QSqlQuery updateQuery(db);
 
@@ -737,8 +803,8 @@ bool renameFile(QSqlDatabase& db,
 
 
     // -------------------------------------------------
-    //  ˝æ›ø‚–ﬁ∏ƒ ß∞‹
-    // ‘ÚΩ´’Ê µŒƒº˛ª÷∏¥‘≠√˚
+    // Êï∞ÊçÆÂ∫ì‰øÆÊîπÂ§±Ë¥•
+    // ÂàôÂ∞ÜÁúüÂÆûÊñá‰ª∂ÊÅ¢Â§çÂéüÂêç
     // -------------------------------------------------
     if (!updateQuery.exec())
     {
@@ -766,7 +832,7 @@ bool renameFile(QSqlDatabase& db,
 }
 
 // =====================================================
-// 7. ∏˘æ›Œƒº˛ ID ªÒ»°’Ê µŒƒº˛¬∑æ∂
+// 7. Ê†πÊçÆÊñá‰ª∂ ID Ëé∑ÂèñÁúüÂÆûÊñá‰ª∂Ë∑ØÂæÑ
 // =====================================================
 QString getFilePath(QSqlDatabase& db,
     int fileId,
@@ -801,7 +867,7 @@ QString getFilePath(QSqlDatabase& db,
     QString filePath =
         query.value("path").toString();
 
-    // ‘Ÿ»∑»œ¥≈≈Ã…œµƒ’Ê µŒƒº˛»∑ µ¥Ê‘⁄
+    // ÂÜçÁ°ÆËÆ§Á£ÅÁõò‰∏äÁöÑÁúüÂÆûÊñá‰ª∂Á°ÆÂÆûÂ≠òÂú®
     if (!QFile::exists(filePath))
     {
         qDebug() << "Physical file does not exist:"
@@ -814,7 +880,7 @@ QString getFilePath(QSqlDatabase& db,
 }
 
 // =====================================================
-// 8. ≤È—ØŒƒº˛µƒ»´≤ø¿˙ ∑∞Ê±æ
+// 8. Êü•ËØ¢Êñá‰ª∂ÁöÑÂÖ®ÈÉ®ÂéÜÂè≤ÁâàÊú¨
 // =====================================================
 void listFileVersions(
     QSqlDatabase& db,
@@ -884,7 +950,7 @@ void listFileVersions(
 }
 
 // =====================================================
-// 9. Œ™œ÷”–Œƒº˛ÃÌº”–¬∞Ê±æ
+// 9. ‰∏∫Áé∞ÊúâÊñá‰ª∂Ê∑ªÂä†Êñ∞ÁâàÊú¨
 // =====================================================
 bool addFileVersion(
     QSqlDatabase& db,
@@ -892,7 +958,7 @@ bool addFileVersion(
     const QString& sourcePath,
     const QString& owner)
 {
-    // ºÏ≤È”√ªß
+    // Ê£ÄÊü•Áî®Êà∑
     if (owner.isEmpty() ||
         owner.contains("/") ||
         owner.contains("\\"))
@@ -902,7 +968,7 @@ bool addFileVersion(
         return false;
     }
 
-    // ºÏ≤È–¬∞Ê±æ‘¥Œƒº˛
+    // Ê£ÄÊü•Êñ∞ÁâàÊú¨Ê∫êÊñá‰ª∂
     QFileInfo sourceInfo(sourcePath);
 
     if (!sourceInfo.exists() || !sourceInfo.isFile())
@@ -921,7 +987,7 @@ bool addFileVersion(
         return false;
     }
 
-    // ≤È—Ø¬ﬂº≠Œƒº˛£¨≤¢—È÷§À˘”–’ﬂ
+    // Êü•ËØ¢ÈÄªËæëÊñá‰ª∂ÔºåÂπ∂È™åËØÅÊâÄÊúâËÄÖ
     QSqlQuery fileQuery(db);
 
     fileQuery.prepare(
@@ -951,7 +1017,7 @@ bool addFileVersion(
     QString logicalFilename =
         fileQuery.value("filename").toString();
 
-    // º∆À„œ¬“ª∏ˆ∞Ê±æ∫≈
+    // ËÆ°ÁÆó‰∏ã‰∏Ä‰∏™ÁâàÊú¨Âè∑
     QSqlQuery versionQuery(db);
 
     versionQuery.prepare(
@@ -974,7 +1040,7 @@ bool addFileVersion(
     int nextVersion =
         versionQuery.value("next_version").toInt();
 
-    // ¥¥Ω®∏√Œƒº˛◊®”√µƒ∞Ê±æƒø¬º
+    // ÂàõÂª∫ËØ•Êñá‰ª∂‰∏ìÁî®ÁöÑÁâàÊú¨ÁõÆÂΩï
     QString versionDirectory =
         "data/files/" +
         owner +
@@ -994,7 +1060,7 @@ bool addFileVersion(
         }
     }
 
-    // …˙≥…–¬∞Ê±æµƒ¥≈≈Ã¬∑æ∂
+    // ÁîüÊàêÊñ∞ÁâàÊú¨ÁöÑÁ£ÅÁõòË∑ØÂæÑ
     QString versionFilename =
         QString("v%1_%2")
         .arg(nextVersion)
@@ -1013,7 +1079,7 @@ bool addFileVersion(
         return false;
     }
 
-    // œ»Ω´–¬∞Ê±æ∏¥÷∆µΩ∑˛ŒÒ∆˜¥Ê¥¢ƒø¬º
+    // ÂÖàÂ∞ÜÊñ∞ÁâàÊú¨Â§çÂà∂Âà∞ÊúçÂä°Âô®Â≠òÂÇ®ÁõÆÂΩï
     if (!QFile::copy(sourcePath, targetPath))
     {
         qDebug() << "Copy new version failed.";
@@ -1027,7 +1093,7 @@ bool addFileVersion(
         QDateTime::currentDateTime()
         .toString("yyyy-MM-dd HH:mm:ss");
 
-    // ø™∆Ù ˝æ›ø‚ ¬ŒÒ
+    // ÂºÄÂêØÊï∞ÊçÆÂ∫ì‰∫ãÂä°
     if (!db.transaction())
     {
         qDebug() << "Start version transaction failed.";
@@ -1037,7 +1103,7 @@ bool addFileVersion(
         return false;
     }
 
-    // –¥»Î¿˙ ∑∞Ê±æ±Ì
+    // ÂÜôÂÖ•ÂéÜÂè≤ÁâàÊú¨Ë°®
     QSqlQuery insertQuery(db);
 
     insertQuery.prepare(
@@ -1065,7 +1131,7 @@ bool addFileVersion(
         return false;
     }
 
-    // files±Ì º÷’÷∏œÚ◊Ó–¬∞Ê±æ
+    // filesË°®ÂßãÁªàÊåáÂêëÊúÄÊñ∞ÁâàÊú¨
     QSqlQuery updateQuery(db);
 
     updateQuery.prepare(
@@ -1112,7 +1178,7 @@ bool addFileVersion(
 }
 
 // =====================================================
-// 10. ªÒ»°÷∏∂®¿˙ ∑∞Ê±æµƒ’Ê µ¥Ê¥¢¬∑æ∂
+// 10. Ëé∑ÂèñÊåáÂÆöÂéÜÂè≤ÁâàÊú¨ÁöÑÁúüÂÆûÂ≠òÂÇ®Ë∑ØÂæÑ
 // =====================================================
 QString getFileVersionPath(
     QSqlDatabase& db,
@@ -1172,7 +1238,7 @@ QString getFileVersionPath(
 
 
 // =====================================================
-// 11. ª÷∏¥÷∏∂®¿˙ ∑∞Ê±æ
+// 11. ÊÅ¢Â§çÊåáÂÆöÂéÜÂè≤ÁâàÊú¨
 // =====================================================
 bool restoreFileVersion(
     QSqlDatabase& db,
@@ -1194,8 +1260,8 @@ bool restoreFileVersion(
         return false;
     }
 
-    // ª÷∏¥ ±≤ª∏≤∏«¿˙ ∑º«¬º£¨
-    // ∂¯ «Ω´÷∏∂®∞Ê±æ∏¥÷∆Œ™“ª∏ˆ–¬µƒ◊Ó–¬∞Ê±æ
+    // ÊÅ¢Â§çÊó∂‰∏çË¶ÜÁõñÂéÜÂè≤ËÆ∞ÂΩïÔºå
+    // ËÄåÊòØÂ∞ÜÊåáÂÆöÁâàÊú¨Â§çÂà∂‰∏∫‰∏Ä‰∏™Êñ∞ÁöÑÊúÄÊñ∞ÁâàÊú¨
     if (!addFileVersion(
         db,
         fileId,
@@ -1214,7 +1280,7 @@ bool restoreFileVersion(
 
 
 // =====================================================
-// 12. …æ≥˝÷∏∂®¿˙ ∑∞Ê±æ
+// 12. Âà†Èô§ÊåáÂÆöÂéÜÂè≤ÁâàÊú¨
 // =====================================================
 bool deleteFileVersion(
     QSqlDatabase& db,
@@ -1228,7 +1294,7 @@ bool deleteFileVersion(
         return false;
     }
 
-    // ≤È—Ø÷∏∂®∞Ê±æ£¨Õ¨ ±—È÷§Œƒº˛À˘”–’ﬂ
+    // Êü•ËØ¢ÊåáÂÆöÁâàÊú¨ÔºåÂêåÊó∂È™åËØÅÊñá‰ª∂ÊâÄÊúâËÄÖ
     QSqlQuery findQuery(db);
 
     findQuery.prepare(
@@ -1264,7 +1330,7 @@ bool deleteFileVersion(
     QString latestPath =
         findQuery.value("latest_path").toString();
 
-    // files±Ì÷∏œÚµƒ∞Ê±æ «µ±«∞◊Ó–¬∞Ê±æ£¨≤ªƒ‹µ•∂¿…æ≥˝
+    // filesË°®ÊåáÂêëÁöÑÁâàÊú¨ÊòØÂΩìÂâçÊúÄÊñ∞ÁâàÊú¨Ôºå‰∏çËÉΩÂçïÁã¨Âà†Èô§
     if (versionPath == latestPath)
     {
         qDebug() << "The latest version cannot be deleted.";
@@ -1279,7 +1345,7 @@ bool deleteFileVersion(
         return false;
     }
 
-    // œ»¡Ÿ ±∏ƒ√˚£¨ ˝æ›ø‚≤Ÿ◊˜ ß∞‹ ±ø…“‘ª÷∏¥
+    // ÂÖà‰∏¥Êó∂ÊîπÂêçÔºåÊï∞ÊçÆÂ∫ìÊìç‰ΩúÂ§±Ë¥•Êó∂ÂèØ‰ª•ÊÅ¢Â§ç
     QString tempPath =
         versionPath + ".deleting";
 
@@ -1355,7 +1421,7 @@ bool deleteFileVersion(
 }
 
 // =====================================================
-// 13. º∆À„Œƒº˛µƒSHA-256÷µ
+// 13. ËÆ°ÁÆóÊñá‰ª∂ÁöÑSHA-256ÂÄº
 // =====================================================
 QString calculateFileSha256(
     const QString& filePath)
@@ -1406,7 +1472,7 @@ QString calculateFileSha256(
 }
 
 // =====================================================
-// 14. Œ™æ…∞Ê±æ◊‘∂Ø≤π∆ÎSHA-256
+// 14. ‰∏∫ÊóßÁâàÊú¨Ëá™Âä®Ë°•ÈΩêSHA-256
 // =====================================================
 static bool backfillMissingSha256(
     QSqlDatabase& db)
@@ -1483,7 +1549,7 @@ static bool backfillMissingSha256(
 }
 
 // =====================================================
-// 15. ∏˘æ›SHA-256≤È’“∑˛ŒÒ∆˜“—”–Œƒº˛
+// 15. Ê†πÊçÆSHA-256Êü•ÊâæÊúçÂä°Âô®Â∑≤ÊúâÊñá‰ª∂
 // =====================================================
 QString findFilePathBySha256(
     QSqlDatabase& db,
@@ -1523,7 +1589,7 @@ QString findFilePathBySha256(
         QString existingPath =
             query.value("path").toString();
 
-        // Ã¯π˝ ˝æ›ø‚÷–¥Ê‘⁄°¢µ´¥≈≈ÃŒƒº˛“—∂™ ßµƒ“Ï≥£º«¬º
+        // Ë∑≥ËøáÊï∞ÊçÆÂ∫ì‰∏≠Â≠òÂú®„ÄÅ‰ΩÜÁ£ÅÁõòÊñá‰ª∂Â∑≤‰∏¢Â§±ÁöÑÂºÇÂ∏∏ËÆ∞ÂΩï
         if (QFile::exists(existingPath))
         {
             qDebug() << "Duplicate file found:";
@@ -1538,7 +1604,7 @@ QString findFilePathBySha256(
 }
 
 // =====================================================
-// 16. ∏˘æ›SHA-256ÕÍ≥…ª˘¥°√Î¥´
+// 16. Ê†πÊçÆSHA-256ÂÆåÊàêÂü∫Á°ÄÁßí‰º†
 // =====================================================
 bool instantUploadFile(
     QSqlDatabase& db,
@@ -1571,7 +1637,7 @@ bool instantUploadFile(
         return false;
     }
 
-    // ≤È’“∑˛ŒÒ∆˜÷–“—æ≠¥Ê‘⁄µƒœ‡Õ¨ƒ⁄»›
+    // Êü•ÊâæÊúçÂä°Âô®‰∏≠Â∑≤ÁªèÂ≠òÂú®ÁöÑÁõ∏ÂêåÂÜÖÂÆπ
     QString existingPath =
         findFilePathBySha256(
             db,
@@ -1595,7 +1661,7 @@ bool instantUploadFile(
         return false;
     }
 
-    // Õ¨“ª”√ªß≤ªƒ‹¥Ê‘⁄Õ¨√˚¬ﬂº≠Œƒº˛
+    // Âêå‰∏ÄÁî®Êà∑‰∏çËÉΩÂ≠òÂú®ÂêåÂêçÈÄªËæëÊñá‰ª∂
     QSqlQuery duplicateQuery(db);
 
     duplicateQuery.prepare(
@@ -1636,7 +1702,7 @@ bool instantUploadFile(
         return false;
     }
 
-    // œ»Ω®¡¢¬ﬂº≠Œƒº˛º«¬º“‘ªÒµ√fileId
+    // ÂÖàÂª∫Á´ãÈÄªËæëÊñá‰ª∂ËÆ∞ÂΩï‰ª•Ëé∑ÂæófileId
     QSqlQuery insertFileQuery(db);
 
     insertFileQuery.prepare(
@@ -1694,7 +1760,7 @@ bool instantUploadFile(
         return false;
     }
 
-    // ∑˛ŒÒ∆˜ƒ⁄≤ø∏¥÷∆£¨Œﬁ–ËøÕªß∂À÷ÿ–¬¥´ ‰Œƒº˛ƒ⁄»›
+    // ÊúçÂä°Âô®ÂÜÖÈÉ®Â§çÂà∂ÔºåÊó†ÈúÄÂÆ¢Êà∑Á´ØÈáçÊñ∞‰º†ËæìÊñá‰ª∂ÂÜÖÂÆπ
     if (!QFile::copy(existingPath, targetPath))
     {
         qDebug() << "Server-side instant copy failed.";
@@ -1772,5 +1838,138 @@ bool instantUploadFile(
 
     return true;
 }
+
+static bool recoverInterruptedDeletions(
+    QSqlDatabase& db)
+{
+    const QString STORAGE_DIRECTORY =
+        "data/files";
+
+    QDir storageDirectory(STORAGE_DIRECTORY);
+
+    if (!storageDirectory.exists())
+    {
+        return true;
+    }
+
+    QDirIterator iterator(
+        STORAGE_DIRECTORY,
+        QStringList() << "*.deleting*",
+        QDir::Files,
+        QDirIterator::Subdirectories
+    );
+
+    int restoredFileCount = 0;
+    int removedFileCount = 0;
+    int conflictFileCount = 0;
+
+    while (iterator.hasNext())
+    {
+        const QString temporaryPath =
+            iterator.next();
+
+        QString originalPath;
+
+        const int markerPosition =
+            temporaryPath.lastIndexOf(".deleting.");
+
+        if (markerPosition >= 0)
+        {
+            originalPath =
+                temporaryPath.left(markerPosition);
+        }
+        else if (temporaryPath.endsWith(".deleting"))
+        {
+            originalPath =
+                temporaryPath.left(
+                    temporaryPath.length() -
+                    QString(".deleting").length()
+                );
+        }
+        else
+        {
+            continue;
+        }
+
+        QSqlQuery referenceQuery(db);
+
+        referenceQuery.prepare(
+            "SELECT 1 FROM files "
+            "WHERE path = ? "
+            "UNION ALL "
+            "SELECT 1 FROM file_versions "
+            "WHERE path = ? "
+            "LIMIT 1"
+        );
+
+        referenceQuery.addBindValue(originalPath);
+        referenceQuery.addBindValue(originalPath);
+
+        if (!referenceQuery.exec())
+        {
+            qDebug() << "Check temporary file reference failed:"
+                << referenceQuery.lastError().text();
+
+            return false;
+        }
+
+        const bool isReferenced =
+            referenceQuery.next();
+
+        if (isReferenced)
+        {
+            // Êï∞ÊçÆÂ∫ì‰ªçÂºïÁî®ÂéüË∑ØÂæÑÔºåËØ¥ÊòéÂà†Èô§‰∫ãÂä°Ê≤°ÊúâÊèê‰∫§
+            if (!QFile::exists(originalPath))
+            {
+                if (!QFile::rename(
+                    temporaryPath,
+                    originalPath))
+                {
+                    qDebug() << "Failed to restore interrupted file:"
+                        << temporaryPath;
+
+                    return false;
+                }
+
+                ++restoredFileCount;
+
+                qDebug() << "Interrupted file restored:"
+                    << originalPath;
+            }
+            else
+            {
+                // ÂéüÊñá‰ª∂Âíå‰∏¥Êó∂Êñá‰ª∂ÂêåÊó∂Â≠òÂú®Ôºå‰∏çËÉΩË¥∏ÁÑ∂Ë¶ÜÁõñ
+                ++conflictFileCount;
+
+                qDebug() << "Warning: recovery conflict detected:"
+                    << temporaryPath;
+            }
+        }
+        else
+        {
+            // Êï∞ÊçÆÂ∫ìÂ∑≤‰∏çÂÜçÂºïÁî®ÂéüË∑ØÂæÑÔºåËØ¥Êòé‰∫ãÂä°Â∑≤ÁªèÊèê‰∫§
+            if (QFile::remove(temporaryPath))
+            {
+                ++removedFileCount;
+
+                qDebug() << "Unreferenced temporary file removed:"
+                    << temporaryPath;
+            }
+            else
+            {
+                qDebug() << "Warning: failed to remove temporary file:"
+                    << temporaryPath;
+            }
+        }
+    }
+
+    qDebug() << "Interrupted deletion recovery completed.";
+    qDebug() << "Restored files:" << restoredFileCount;
+    qDebug() << "Removed temporary files:" << removedFileCount;
+    qDebug() << "Recovery conflicts:" << conflictFileCount;
+
+    return true;
+}
+
 } // namespace server
 } // namespace netdisk

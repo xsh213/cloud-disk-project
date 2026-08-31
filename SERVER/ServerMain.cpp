@@ -42,7 +42,6 @@ int main(int argc, char* argv[])
     QString currentUser =
         "user01";
 
-
     // =================================================
     // 测试区域
     //

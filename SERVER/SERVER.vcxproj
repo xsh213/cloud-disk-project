@@ -148,7 +148,7 @@
     <ClInclude Include="StorageManager.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="main.cpp" />
+    <ClCompile Include="ServerMain.cpp" />
     <ClCompile Include="StorageManager.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
