@@ -11,6 +11,11 @@
 #include <QCryptographicHash>
 #include <QList>
 #include <QPair>
+
+namespace netdisk
+{
+    namespace server
+    {
 static bool backfillMissingSha256(
     QSqlDatabase& db
 );
@@ -1369,13 +1374,13 @@ QString calculateFileSha256(
         QCryptographicHash::Sha256
     );
 
-    const qint64 bufferSize =
+    const qint64 BUFFER_SIZE =
         1024 * 1024;
 
     while (!file.atEnd())
     {
         QByteArray data =
-            file.read(bufferSize);
+            file.read(BUFFER_SIZE);
 
         if (data.isEmpty() &&
             file.error() != QFile::NoError)
@@ -1767,3 +1772,5 @@ bool instantUploadFile(
 
     return true;
 }
+} // namespace server
+} // namespace netdisk

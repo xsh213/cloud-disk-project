@@ -3,6 +3,11 @@
 #include <QSqlDatabase>
 #include <QString>
 
+namespace netdisk
+{
+    namespace server
+    {
+
 // 初始化数据库
 bool initDatabase(QSqlDatabase& db);
 
@@ -104,3 +109,6 @@ bool instantUploadFile(
     const QString& sha256,
     const QString& owner
 );
+
+} // namespace server
+} // namespace netdisk
