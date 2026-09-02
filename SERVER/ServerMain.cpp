@@ -7,6 +7,8 @@
 #include <QTcpSocket>
 #include <QHostAddress>
 
+using namespace netdisk::server;
+
 // =====================================================
 // 主函数
 // =====================================================
@@ -39,8 +41,8 @@ int main(int argc, char* argv[])
     // 当前测试用户
     QString currentUser =
         "user01";
-
-
+ 
+    // =================================================
     // =================================================
     // 测试区域
     //
@@ -119,14 +121,14 @@ int main(int argc, char* argv[])
 // 成功后必须关闭
 // -------------------------------------------------
     /*
-bool restoreSuccess = restoreFileVersion(
+bool isRestoreSuccessful = restoreFileVersion(
     db,
     1,
     1,
     currentUser
 );
 
-if (restoreSuccess)
+if (isRestoreSuccessful)
 {
     qDebug() << "Restore test succeeded!";
 }
@@ -224,14 +226,14 @@ if (!versionOnePath.isEmpty())
         << versionOnePath;
 }
 
-bool latestDeleteResult = deleteFileVersion(
+bool isLatestDeleteAllowed = deleteFileVersion(
     db,
     1,
     3,
     currentUser
 );
 
-if (!latestDeleteResult)
+if (!isLatestDeleteAllowed)
 {
     qDebug()
         << "Safety test passed: latest version was protected.";
@@ -256,14 +258,14 @@ listFileVersions(
     QString testSha256 =
         "58055843f8f14fb4decc09feb0e6ed43e8d81c7fcafa6d86fb209e672b2592fb";
 
-    bool instantSuccess = instantUploadFile(
+    bool isInstantUploadSuccessful = instantUploadFile(
         db,
         "sizheng_instant_copy.pdf",
         testSha256,
         currentUser
     );
 
-    if (instantSuccess)
+    if (isInstantUploadSuccessful)
     {
         qDebug() << "Instant upload test succeeded!";
     }

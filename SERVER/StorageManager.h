@@ -1,35 +1,48 @@
-#pragma once
+ï»¿#pragma once
 
 #include <QSqlDatabase>
 #include <QString>
 
-// ³õÊ¼»¯Êı¾İ¿â
+namespace netdisk
+{
+    namespace server
+    {
+
+// åˆå§‹åŒ–æ•°æ®åº“
 bool initDatabase(QSqlDatabase& db);
 
-// ³õÊ¼»¯·şÎñÆ÷´æ´¢Ä¿Â¼
+// åˆå§‹åŒ–æœåŠ¡å™¨å­˜å‚¨ç›®å½•
 bool initStorageDirectory();
 
-// ĞÂÔöÎÄ¼ş
+// æ–°å¢æ–‡ä»¶
 bool addFile(
     QSqlDatabase& db,
     const QString& sourcePath,
     const QString& owner
 );
+// æ ¡éªŒä¸Šä¼ æ–‡ä»¶çš„SHA-256å¹¶å®Œæˆå…¥åº“
+// temporaryFilePathå¿…é¡»æ˜¯æœåŠ¡å™¨æ¥æ”¶å®Œæˆåçš„ä¸´æ—¶æ–‡ä»¶
+bool addUploadedFile(
+    QSqlDatabase& db,
+    const QString& temporaryFilePath,
+    const QString& owner,
+    const QString& clientSha256
+);
 
-// ²éÑ¯Ö¸¶¨ÓÃ»§µÄÎÄ¼şÁĞ±í
+// æŸ¥è¯¢æŒ‡å®šç”¨æˆ·çš„æ–‡ä»¶åˆ—è¡¨
 void listFiles(
     QSqlDatabase& db,
     const QString& owner
 );
 
-// É¾³ıÕû¸öÎÄ¼ş¼°ÆäÈ«²¿°æ±¾
+// åˆ é™¤æ•´ä¸ªæ–‡ä»¶åŠå…¶å…¨éƒ¨ç‰ˆæœ¬
 bool deleteFile(
     QSqlDatabase& db,
     int fileId,
     const QString& owner
 );
 
-// ÖØÃüÃûÎÄ¼ş
+// é‡å‘½åæ–‡ä»¶
 bool renameFile(
     QSqlDatabase& db,
     int fileId,
@@ -37,29 +50,52 @@ bool renameFile(
     const QString& newFilename
 );
 
-// »ñÈ¡ÎÄ¼ş×îĞÂ°æ±¾µÄÕæÊµ´æ´¢Â·¾¶
+// è·å–æ–‡ä»¶æœ€æ–°ç‰ˆæœ¬çš„çœŸå®å­˜å‚¨è·¯å¾„
 QString getFilePath(
     QSqlDatabase& db,
     int fileId,
     const QString& owner
 );
 
-// ²éÑ¯ÎÄ¼şµÄÈ«²¿ÀúÊ·°æ±¾
+// è·å–æ–‡ä»¶æœ€æ–°ç‰ˆæœ¬çš„SHA-256
+QString getFileSha256(
+    QSqlDatabase& db,
+    int fileId,
+    const QString& owner
+);
+
+// è·å–æŒ‡å®šå†å²ç‰ˆæœ¬çš„SHA-256
+QString getFileVersionSha256(
+    QSqlDatabase& db,
+    int fileId,
+    int versionNumber,
+    const QString& owner
+);
+
+// æŸ¥è¯¢æ–‡ä»¶çš„å…¨éƒ¨å†å²ç‰ˆæœ¬
 void listFileVersions(
     QSqlDatabase& db,
     int fileId,
     const QString& owner
 );
 
-// ÎªÏÖÓĞÎÄ¼şÌí¼ÓÒ»¸öĞÂ°æ±¾
+// ä¸ºç°æœ‰æ–‡ä»¶æ·»åŠ ä¸€ä¸ªæ–°ç‰ˆæœ¬
 bool addFileVersion(
     QSqlDatabase& db,
     int fileId,
     const QString& sourcePath,
     const QString& owner
 );
+// æ ¡éªŒä¸Šä¼ çš„æ–°ç‰ˆæœ¬SHA-256å¹¶å®Œæˆå…¥åº“
+bool addUploadedFileVersion(
+    QSqlDatabase& db,
+    int fileId,
+    const QString& temporaryFilePath,
+    const QString& owner,
+    const QString& clientSha256
+);
 
-// »ñÈ¡Ö¸¶¨ÀúÊ·°æ±¾µÄÕæÊµ´æ´¢Â·¾¶
+// è·å–æŒ‡å®šå†å²ç‰ˆæœ¬çš„çœŸå®å­˜å‚¨è·¯å¾„
 QString getFileVersionPath(
     QSqlDatabase& db,
     int fileId,
@@ -67,8 +103,8 @@ QString getFileVersionPath(
     const QString& owner
 );
 
-// »Ö¸´Ö¸¶¨ÀúÊ·°æ±¾
-// »Ö¸´²Ù×÷»áÉú³ÉÒ»¸öĞÂµÄ×îĞÂ°æ±¾£¬²»»á¸²¸ÇÔ­ÀúÊ·¼ÇÂ¼
+// æ¢å¤æŒ‡å®šå†å²ç‰ˆæœ¬
+// æ¢å¤æ“ä½œä¼šç”Ÿæˆä¸€ä¸ªæ–°çš„æœ€æ–°ç‰ˆæœ¬ï¼Œä¸ä¼šè¦†ç›–åŸå†å²è®°å½•
 bool restoreFileVersion(
     QSqlDatabase& db,
     int fileId,
@@ -76,8 +112,8 @@ bool restoreFileVersion(
     const QString& owner
 );
 
-// É¾³ıÖ¸¶¨ÀúÊ·°æ±¾
-// ²»ÔÊĞíÉ¾³ıµ±Ç°×îĞÂ°æ±¾
+// åˆ é™¤æŒ‡å®šå†å²ç‰ˆæœ¬
+// ä¸å…è®¸åˆ é™¤å½“å‰æœ€æ–°ç‰ˆæœ¬
 bool deleteFileVersion(
     QSqlDatabase& db,
     int fileId,
@@ -85,22 +121,25 @@ bool deleteFileVersion(
     const QString& owner
 );
 
-// ¼ÆËãÖ¸¶¨ÎÄ¼şµÄSHA-256Öµ
+// è®¡ç®—æŒ‡å®šæ–‡ä»¶çš„SHA-256å€¼
 QString calculateFileSha256(
     const QString& filePath
 );
 
-// ¸ù¾İSHA-256²éÕÒ·şÎñÆ÷ÖĞÒÑÓĞµÄÍêÕûÎÄ¼ş
-// ÕÒ²»µ½Ê±·µ»Ø¿Õ×Ö·û´®
+// æ ¹æ®SHA-256æŸ¥æ‰¾æœåŠ¡å™¨ä¸­å·²æœ‰çš„å®Œæ•´æ–‡ä»¶
+// æ‰¾ä¸åˆ°æ—¶è¿”å›ç©ºå­—ç¬¦ä¸²
 QString findFilePathBySha256(
     QSqlDatabase& db,
     const QString& sha256
 );
 
-// ¸ù¾İ·şÎñÆ÷ÒÑÓĞÄÚÈİÍê³ÉÃë´«
+// æ ¹æ®æœåŠ¡å™¨å·²æœ‰å†…å®¹å®Œæˆç§’ä¼ 
 bool instantUploadFile(
     QSqlDatabase& db,
     const QString& filename,
     const QString& sha256,
     const QString& owner
 );
+
+} // namespace server
+} // namespace netdisk
