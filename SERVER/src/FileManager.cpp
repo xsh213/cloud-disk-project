@@ -1,4 +1,5 @@
-﻿#include "StorageManager.h"
+﻿#include "FileManager.h"
+#include "StorageEngine.h"
 
 #include <QSqlQuery>
 #include <QSqlError>
@@ -20,11 +21,105 @@ namespace netdisk
 {
     namespace server
     {
+namespace detail
+{
+bool initDatabase(
+    QSqlDatabase& database,
+    const QString& databasePath
+);
+bool initStorageDirectory();
+bool addFile(
+    QSqlDatabase& database,
+    const QString& sourcePath,
+    const QString& owner
+);
+bool addUploadedFile(
+    QSqlDatabase& database,
+    const QString& temporaryFilePath,
+    const QString& owner,
+    const QString& clientSha256
+);
+void listFiles(QSqlDatabase& database, const QString& owner);
+bool deleteFile(
+    QSqlDatabase& database,
+    int fileId,
+    const QString& owner
+);
+bool renameFile(
+    QSqlDatabase& database,
+    int fileId,
+    const QString& owner,
+    const QString& newFileName
+);
+QString getFilePath(
+    QSqlDatabase& database,
+    int fileId,
+    const QString& owner
+);
+QString getFileSha256(
+    QSqlDatabase& database,
+    int fileId,
+    const QString& owner
+);
+QString getFileVersionSha256(
+    QSqlDatabase& database,
+    int fileId,
+    int versionNumber,
+    const QString& owner
+);
+void listFileVersions(
+    QSqlDatabase& database,
+    int fileId,
+    const QString& owner
+);
+bool addFileVersion(
+    QSqlDatabase& database,
+    int fileId,
+    const QString& sourcePath,
+    const QString& owner
+);
+bool addUploadedFileVersion(
+    QSqlDatabase& database,
+    int fileId,
+    const QString& temporaryFilePath,
+    const QString& owner,
+    const QString& clientSha256
+);
+QString getFileVersionPath(
+    QSqlDatabase& database,
+    int fileId,
+    int versionNumber,
+    const QString& owner
+);
+bool restoreFileVersion(
+    QSqlDatabase& database,
+    int fileId,
+    int versionNumber,
+    const QString& owner
+);
+bool deleteFileVersion(
+    QSqlDatabase& database,
+    int fileId,
+    int versionNumber,
+    const QString& owner
+);
+QString calculateFileSha256(const QString& filePath);
+QString findFilePathBySha256(
+    QSqlDatabase& database,
+    const QString& sha256
+);
+bool instantUploadFile(
+    QSqlDatabase& database,
+    const QString& fileName,
+    const QString& sha256,
+    const QString& owner
+);
+
 static bool backfillMissingSha256(
-    QSqlDatabase& db
+    QSqlDatabase& database
 );
 static bool recoverInterruptedDeletions(
-    QSqlDatabase& db
+    QSqlDatabase& database
 );
 
 static bool isValidSha256Value(
@@ -59,22 +154,24 @@ static bool isValidSha256Value(
 // =====================================================
 // 1. 初始化数据库
 // =====================================================
-bool initDatabase(QSqlDatabase& db)
+bool initDatabase(
+    QSqlDatabase& database,
+    const QString& databasePath)
 {
-    db = QSqlDatabase::addDatabase("QSQLITE");
-    db.setDatabaseName("server.db");
+    database = QSqlDatabase::addDatabase("QSQLITE");
+    database.setDatabaseName(databasePath);
 
-    if (!db.open())
+    if (!database.open())
     {
         qDebug() << "Database open failed:"
-            << db.lastError().text();
+            << database.lastError().text();
 
         return false;
     }
 
     qDebug() << "Database opened successfully!";
 
-    QSqlQuery query(db);
+    QSqlQuery query(database);
 
     // 开启SQLite外键约束
     if (!query.exec("PRAGMA foreign_keys = ON"))
@@ -150,14 +247,14 @@ bool initDatabase(QSqlDatabase& db)
     qDebug() << "Existing files migrated to version 1!";
 
     // 先恢复异常中断的删除操作
-    if (!recoverInterruptedDeletions(db))
+    if (!recoverInterruptedDeletions(database))
     {
         qDebug() << "Interrupted deletion recovery failed.";
         return false;
     }
 
     // 恢复完成后，再补齐缺失的SHA-256
-    if (!backfillMissingSha256(db))
+    if (!backfillMissingSha256(database))
     {
         qDebug() << "Backfill missing SHA-256 failed.";
         return false;
@@ -171,14 +268,14 @@ bool initDatabase(QSqlDatabase& db)
 // =====================================================
 bool initStorageDirectory()
 {
-    QString storageDir = "data/files";
+    QString storageDirectoryPath = "data/files";
 
-    QDir dir;
+    QDir storageDirectory;
 
     // 如果目录不存在，则自动创建
-    if (!dir.exists(storageDir))
+    if (!storageDirectory.exists(storageDirectoryPath))
     {
-        if (!dir.mkpath(storageDir))
+        if (!storageDirectory.mkpath(storageDirectoryPath))
         {
             qDebug() << "Failed to create storage directory.";
 
@@ -187,7 +284,7 @@ bool initStorageDirectory()
     }
 
     qDebug() << "Storage directory ready:"
-        << storageDir;
+        << storageDirectoryPath;
 
     return true;
 }
@@ -197,7 +294,7 @@ bool initStorageDirectory()
 // 3. 添加文件
 // =====================================================
 bool addFile(
-    QSqlDatabase& db,
+    QSqlDatabase& database,
     const QString& sourcePath,
     const QString& owner)
 {
@@ -220,7 +317,7 @@ bool addFile(
         return false;
     }
 
-    QString filename = fileInfo.fileName();
+    const QString fileName = fileInfo.fileName();
     qint64 fileSize = fileInfo.size();
 
     QString fileSha256 =
@@ -232,25 +329,25 @@ bool addFile(
         return false;
     }
 
-    QString userStorageDir =
+    QString userStorageDirectoryPath =
         "data/files/" + owner;
 
-    QDir dir;
+    QDir storageDirectory;
 
-    if (!dir.exists(userStorageDir) &&
-        !dir.mkpath(userStorageDir))
+    if (!storageDirectory.exists(userStorageDirectoryPath) &&
+        !storageDirectory.mkpath(userStorageDirectoryPath))
     {
         qDebug() << "Failed to create user storage directory:"
-            << userStorageDir;
+            << userStorageDirectoryPath;
 
         return false;
     }
 
     QString targetPath =
-        userStorageDir + "/" + filename;
+        userStorageDirectoryPath + "/" + fileName;
 
     // 检查数据库中是否存在同名文件
-    QSqlQuery checkQuery(db);
+    QSqlQuery checkQuery(database);
 
     checkQuery.prepare(
         "SELECT id "
@@ -258,7 +355,7 @@ bool addFile(
         "WHERE filename = ? AND owner = ?"
     );
 
-    checkQuery.addBindValue(filename);
+    checkQuery.addBindValue(fileName);
     checkQuery.addBindValue(owner);
 
     if (!checkQuery.exec())
@@ -272,7 +369,7 @@ bool addFile(
     if (checkQuery.next())
     {
         qDebug() << "File already exists for this user:"
-            << filename;
+            << fileName;
 
         return false;
     }
@@ -297,7 +394,7 @@ bool addFile(
         .toString("yyyy-MM-dd HH:mm:ss");
 
     // files和file_versions必须同时写入成功
-    if (!db.transaction())
+    if (!database.transaction())
     {
         qDebug() << "Failed to start add-file transaction.";
 
@@ -305,7 +402,7 @@ bool addFile(
         return false;
     }
 
-    QSqlQuery insertFileQuery(db);
+    QSqlQuery insertFileQuery(database);
 
     insertFileQuery.prepare(
         "INSERT INTO files "
@@ -313,7 +410,7 @@ bool addFile(
         "VALUES (?, ?, ?, ?, ?)"
     );
 
-    insertFileQuery.addBindValue(filename);
+    insertFileQuery.addBindValue(fileName);
     insertFileQuery.addBindValue(fileSize);
     insertFileQuery.addBindValue(owner);
     insertFileQuery.addBindValue(targetPath);
@@ -324,7 +421,7 @@ bool addFile(
         qDebug() << "Insert file record failed:"
             << insertFileQuery.lastError().text();
 
-        db.rollback();
+        database.rollback();
         QFile::remove(targetPath);
 
         return false;
@@ -334,7 +431,7 @@ bool addFile(
         insertFileQuery.lastInsertId().toInt();
 
     // 新文件立即登记为版本1，不需要重启服务器
-    QSqlQuery insertVersionQuery(db);
+    QSqlQuery insertVersionQuery(database);
 
     insertVersionQuery.prepare(
         "INSERT INTO file_versions "
@@ -354,18 +451,18 @@ bool addFile(
         qDebug() << "Insert version 1 failed:"
             << insertVersionQuery.lastError().text();
 
-        db.rollback();
+        database.rollback();
         QFile::remove(targetPath);
 
         return false;
     }
 
-    if (!db.commit())
+    if (!database.commit())
     {
         qDebug() << "Commit add-file transaction failed:"
-            << db.lastError().text();
+            << database.lastError().text();
 
-        db.rollback();
+        database.rollback();
         QFile::remove(targetPath);
 
         return false;
@@ -380,7 +477,7 @@ bool addFile(
 }
 
 bool addUploadedFile(
-    QSqlDatabase& db,
+    QSqlDatabase& database,
     const QString& temporaryFilePath,
     const QString& owner,
     const QString& clientSha256)
@@ -446,7 +543,7 @@ bool addUploadedFile(
 
     const bool isFileAdded =
         addFile(
-            db,
+            database,
             temporaryFilePath,
             owner
         );
@@ -464,10 +561,10 @@ bool addUploadedFile(
 // =====================================================
 // 4. 查询某个用户的文件列表
 // =====================================================
-void listFiles(QSqlDatabase& db,
+void listFiles(QSqlDatabase& database,
     const QString& owner)
 {
-    QSqlQuery selectQuery(db);
+    QSqlQuery selectQuery(database);
 
 
     selectQuery.prepare(
@@ -503,30 +600,30 @@ void listFiles(QSqlDatabase& db,
         hasFile = true;
 
 
-        int id =
+        const int fileId =
             selectQuery.value("id").toInt();
 
 
-        QString filename =
+        const QString fileName =
             selectQuery.value("filename").toString();
 
 
-        qint64 size =
+        const qint64 fileSize =
             selectQuery.value("size").toLongLong();
 
 
-        QString path =
+        const QString storedPath =
             selectQuery.value("path").toString();
 
 
-        QString uploadTime =
+        const QString uploadTime =
             selectQuery.value("upload_time").toString();
 
 
-        qDebug() << "ID:" << id;
-        qDebug() << "Filename:" << filename;
-        qDebug() << "Size:" << size;
-        qDebug() << "Path:" << path;
+        qDebug() << "ID:" << fileId;
+        qDebug() << "Filename:" << fileName;
+        qDebug() << "Size:" << fileSize;
+        qDebug() << "Path:" << storedPath;
         qDebug() << "Upload time:" << uploadTime;
         qDebug() << "----------------";
     }
@@ -546,7 +643,7 @@ void listFiles(QSqlDatabase& db,
 // 5. 删除文件
 // =====================================================
 bool deleteFile(
-    QSqlDatabase& db,
+    QSqlDatabase& database,
     int fileId,
     const QString& owner)
 {
@@ -582,16 +679,16 @@ bool deleteFile(
             return isRestoreSuccessful;
         };
 
-    if (!db.transaction())
+    if (!database.transaction())
     {
         qDebug() << "Failed to start database transaction:"
-            << db.lastError().text();
+            << database.lastError().text();
 
         return false;
     }
 
     // 查询文件，并同时验证用户权限
-    QSqlQuery findQuery(db);
+    QSqlQuery findQuery(database);
 
     findQuery.prepare(
         "SELECT filename, path "
@@ -607,7 +704,7 @@ bool deleteFile(
         qDebug() << "Find file failed:"
             << findQuery.lastError().text();
 
-        db.rollback();
+        database.rollback();
         return false;
     }
 
@@ -615,11 +712,11 @@ bool deleteFile(
     {
         qDebug() << "File not found or permission denied.";
 
-        db.rollback();
+        database.rollback();
         return false;
     }
 
-    const QString filename =
+    const QString fileName =
         findQuery.value("filename").toString();
 
     // 使用集合保存路径，防止最新版本路径被重复处理
@@ -634,7 +731,7 @@ bool deleteFile(
     }
 
     // 查询该文件的全部历史版本路径
-    QSqlQuery versionQuery(db);
+    QSqlQuery versionQuery(database);
 
     versionQuery.prepare(
         "SELECT path "
@@ -649,7 +746,7 @@ bool deleteFile(
         qDebug() << "Find file versions failed:"
             << versionQuery.lastError().text();
 
-        db.rollback();
+        database.rollback();
         return false;
     }
 
@@ -690,7 +787,7 @@ bool deleteFile(
                 << originalPath;
 
             restoreRenamedFiles();
-            db.rollback();
+            database.rollback();
             return false;
         }
 
@@ -700,7 +797,7 @@ bool deleteFile(
     }
 
     // 显式删除所有历史版本记录
-    QSqlQuery deleteVersionsQuery(db);
+    QSqlQuery deleteVersionsQuery(database);
 
     deleteVersionsQuery.prepare(
         "DELETE FROM file_versions "
@@ -714,13 +811,13 @@ bool deleteFile(
         qDebug() << "Delete file versions failed:"
             << deleteVersionsQuery.lastError().text();
 
-        db.rollback();
+        database.rollback();
         restoreRenamedFiles();
         return false;
     }
 
     // 删除逻辑文件记录
-    QSqlQuery deleteFileQuery(db);
+    QSqlQuery deleteFileQuery(database);
 
     deleteFileQuery.prepare(
         "DELETE FROM files "
@@ -736,17 +833,17 @@ bool deleteFile(
         qDebug() << "Delete file record failed:"
             << deleteFileQuery.lastError().text();
 
-        db.rollback();
+        database.rollback();
         restoreRenamedFiles();
         return false;
     }
 
-    if (!db.commit())
+    if (!database.commit())
     {
         qDebug() << "Database commit failed:"
-            << db.lastError().text();
+            << database.lastError().text();
 
-        db.rollback();
+        database.rollback();
         restoreRenamedFiles();
         return false;
     }
@@ -766,7 +863,7 @@ bool deleteFile(
     }
 
     qDebug() << "File deleted successfully:"
-        << filename;
+        << fileName;
 
     if (!isCleanupSuccessful)
     {
@@ -780,15 +877,15 @@ bool deleteFile(
 // =====================================================
 // 6. 重命名文件
 // =====================================================
-bool renameFile(QSqlDatabase& db,
+bool renameFile(QSqlDatabase& database,
     int fileId,
     const QString& owner,
-    const QString& newFilename)
+    const QString& newFileName)
 {
     // -------------------------------------------------
     // 检查新文件名
     // -------------------------------------------------
-    if (newFilename.isEmpty())
+    if (newFileName.isEmpty())
     {
         qDebug() << "New filename cannot be empty.";
 
@@ -799,8 +896,8 @@ bool renameFile(QSqlDatabase& db,
     // -------------------------------------------------
     // 防止新文件名中出现路径
     // -------------------------------------------------
-    if (newFilename.contains("/") ||
-        newFilename.contains("\\"))
+    if (newFileName.contains("/") ||
+        newFileName.contains("\\"))
     {
         qDebug() << "Invalid filename.";
 
@@ -811,7 +908,7 @@ bool renameFile(QSqlDatabase& db,
     // -------------------------------------------------
     // 查询原文件
     // -------------------------------------------------
-    QSqlQuery findQuery(db);
+    QSqlQuery findQuery(database);
 
 
     findQuery.prepare(
@@ -842,7 +939,7 @@ bool renameFile(QSqlDatabase& db,
     }
 
 
-    QString oldFilename =
+    QString oldFileName =
         findQuery.value("filename").toString();
 
 
@@ -853,7 +950,7 @@ bool renameFile(QSqlDatabase& db,
     // -------------------------------------------------
     // 如果新旧文件名完全相同
     // -------------------------------------------------
-    if (oldFilename == newFilename)
+    if (oldFileName == newFileName)
     {
         qDebug() << "New filename is the same as the old filename.";
 
@@ -869,7 +966,7 @@ bool renameFile(QSqlDatabase& db,
 
 
     QString newPath =
-        directory + "/" + newFilename;
+        directory + "/" + newFileName;
 
 
     // -------------------------------------------------
@@ -897,7 +994,7 @@ bool renameFile(QSqlDatabase& db,
     // -------------------------------------------------
     // 修改数据库记录
     // -------------------------------------------------
-    QSqlQuery updateQuery(db);
+    QSqlQuery updateQuery(database);
 
 
     updateQuery.prepare(
@@ -907,7 +1004,7 @@ bool renameFile(QSqlDatabase& db,
     );
 
 
-    updateQuery.addBindValue(newFilename);
+    updateQuery.addBindValue(newFileName);
     updateQuery.addBindValue(newPath);
     updateQuery.addBindValue(fileId);
     updateQuery.addBindValue(owner);
@@ -934,9 +1031,9 @@ bool renameFile(QSqlDatabase& db,
 
 
     qDebug() << "File renamed successfully:";
-    qDebug() << oldFilename
+    qDebug() << oldFileName
         << "->"
-        << newFilename;
+        << newFileName;
 
 
     return true;
@@ -945,11 +1042,11 @@ bool renameFile(QSqlDatabase& db,
 // =====================================================
 // 7. 根据文件 ID 获取真实文件路径
 // =====================================================
-QString getFilePath(QSqlDatabase& db,
+QString getFilePath(QSqlDatabase& database,
     int fileId,
     const QString& owner)
 {
-    QSqlQuery query(db);
+    QSqlQuery query(database);
 
     query.prepare(
         "SELECT path "
@@ -991,11 +1088,11 @@ QString getFilePath(QSqlDatabase& db,
 }
 
 QString getFileSha256(
-    QSqlDatabase& db,
+    QSqlDatabase& database,
     int fileId,
     const QString& owner)
 {
-    QSqlQuery query(db);
+    QSqlQuery query(database);
 
     query.prepare(
         "SELECT v.sha256 "
@@ -1042,7 +1139,7 @@ QString getFileSha256(
     return sha256;
 }
 QString getFileVersionSha256(
-    QSqlDatabase& db,
+    QSqlDatabase& database,
     int fileId,
     int versionNumber,
     const QString& owner)
@@ -1053,7 +1150,7 @@ QString getFileVersionSha256(
         return "";
     }
 
-    QSqlQuery query(db);
+    QSqlQuery query(database);
 
     query.prepare(
         "SELECT v.sha256 "
@@ -1105,11 +1202,11 @@ QString getFileVersionSha256(
 // 8. 查询文件的全部历史版本
 // =====================================================
 void listFileVersions(
-    QSqlDatabase& db,
+    QSqlDatabase& database,
     int fileId,
     const QString& owner)
 {
-    QSqlQuery query(db);
+    QSqlQuery query(database);
 
     query.prepare(
         "SELECT v.version_number, v.size, v.path, "
@@ -1175,7 +1272,7 @@ void listFileVersions(
 // 9. 为现有文件添加新版本
 // =====================================================
 bool addFileVersion(
-    QSqlDatabase& db,
+    QSqlDatabase& database,
     int fileId,
     const QString& sourcePath,
     const QString& owner)
@@ -1210,7 +1307,7 @@ bool addFileVersion(
     }
 
     // 查询逻辑文件，并验证所有者
-    QSqlQuery fileQuery(db);
+    QSqlQuery fileQuery(database);
 
     fileQuery.prepare(
         "SELECT filename "
@@ -1236,11 +1333,11 @@ bool addFileVersion(
         return false;
     }
 
-    QString logicalFilename =
+    QString logicalFileName =
         fileQuery.value("filename").toString();
 
     // 计算下一个版本号
-    QSqlQuery versionQuery(db);
+    QSqlQuery versionQuery(database);
 
     versionQuery.prepare(
         "SELECT COALESCE(MAX(version_number), 0) + 1 "
@@ -1259,7 +1356,7 @@ bool addFileVersion(
         return false;
     }
 
-    int nextVersion =
+    int nextVersionNumber =
         versionQuery.value("next_version").toInt();
 
     // 创建该文件专用的版本目录
@@ -1269,11 +1366,11 @@ bool addFileVersion(
         "/" +
         QString::number(fileId);
 
-    QDir dir;
+    QDir storageDirectory;
 
-    if (!dir.exists(versionDirectory))
+    if (!storageDirectory.exists(versionDirectory))
     {
-        if (!dir.mkpath(versionDirectory))
+        if (!storageDirectory.mkpath(versionDirectory))
         {
             qDebug() << "Create version directory failed:"
                 << versionDirectory;
@@ -1283,15 +1380,15 @@ bool addFileVersion(
     }
 
     // 生成新版本的磁盘路径
-    QString versionFilename =
+    QString versionFileName =
         QString("v%1_%2")
-        .arg(nextVersion)
-        .arg(logicalFilename);
+        .arg(nextVersionNumber)
+        .arg(logicalFileName);
 
     QString targetPath =
         versionDirectory +
         "/" +
-        versionFilename;
+        versionFileName;
 
     if (QFile::exists(targetPath))
     {
@@ -1316,7 +1413,7 @@ bool addFileVersion(
         .toString("yyyy-MM-dd HH:mm:ss");
 
     // 开启数据库事务
-    if (!db.transaction())
+    if (!database.transaction())
     {
         qDebug() << "Start version transaction failed.";
 
@@ -1326,7 +1423,7 @@ bool addFileVersion(
     }
 
     // 写入历史版本表
-    QSqlQuery insertQuery(db);
+    QSqlQuery insertQuery(database);
 
     insertQuery.prepare(
         "INSERT INTO file_versions "
@@ -1336,7 +1433,7 @@ bool addFileVersion(
     );
 
     insertQuery.addBindValue(fileId);
-    insertQuery.addBindValue(nextVersion);
+    insertQuery.addBindValue(nextVersionNumber);
     insertQuery.addBindValue(fileSize);
     insertQuery.addBindValue(targetPath);
     insertQuery.addBindValue(fileSha256);
@@ -1347,14 +1444,14 @@ bool addFileVersion(
         qDebug() << "Insert new version failed:"
             << insertQuery.lastError().text();
 
-        db.rollback();
+        database.rollback();
         QFile::remove(targetPath);
 
         return false;
     }
 
     // files表始终指向最新版本
-    QSqlQuery updateQuery(db);
+    QSqlQuery updateQuery(database);
 
     updateQuery.prepare(
         "UPDATE files "
@@ -1374,18 +1471,18 @@ bool addFileVersion(
         qDebug() << "Update latest file version failed:"
             << updateQuery.lastError().text();
 
-        db.rollback();
+        database.rollback();
         QFile::remove(targetPath);
 
         return false;
     }
 
-    if (!db.commit())
+    if (!database.commit())
     {
         qDebug() << "Commit new version failed:"
-            << db.lastError().text();
+            << database.lastError().text();
 
-        db.rollback();
+        database.rollback();
         QFile::remove(targetPath);
 
         return false;
@@ -1393,13 +1490,13 @@ bool addFileVersion(
 
     qDebug() << "New file version added successfully!";
     qDebug() << "File ID:" << fileId;
-    qDebug() << "Version:" << nextVersion;
+    qDebug() << "Version:" << nextVersionNumber;
     qDebug() << "Path:" << targetPath;
 
     return true;
 }
 bool addUploadedFileVersion(
-    QSqlDatabase& db,
+    QSqlDatabase& database,
     int fileId,
     const QString& temporaryFilePath,
     const QString& owner,
@@ -1466,7 +1563,7 @@ bool addUploadedFileVersion(
 
     const bool isVersionAdded =
         addFileVersion(
-            db,
+            database,
             fileId,
             temporaryFilePath,
             owner
@@ -1486,7 +1583,7 @@ bool addUploadedFileVersion(
 // 10. 获取指定历史版本的真实存储路径
 // =====================================================
 QString getFileVersionPath(
-    QSqlDatabase& db,
+    QSqlDatabase& database,
     int fileId,
     int versionNumber,
     const QString& owner)
@@ -1497,7 +1594,7 @@ QString getFileVersionPath(
         return "";
     }
 
-    QSqlQuery query(db);
+    QSqlQuery query(database);
 
     query.prepare(
         "SELECT v.path "
@@ -1546,14 +1643,14 @@ QString getFileVersionPath(
 // 11. 恢复指定历史版本
 // =====================================================
 bool restoreFileVersion(
-    QSqlDatabase& db,
+    QSqlDatabase& database,
     int fileId,
     int versionNumber,
     const QString& owner)
 {
     QString versionPath =
         getFileVersionPath(
-            db,
+            database,
             fileId,
             versionNumber,
             owner
@@ -1568,7 +1665,7 @@ bool restoreFileVersion(
     // 恢复时不覆盖历史记录，
     // 而是将指定版本复制为一个新的最新版本
     if (!addFileVersion(
-        db,
+        database,
         fileId,
         versionPath,
         owner))
@@ -1588,7 +1685,7 @@ bool restoreFileVersion(
 // 12. 删除指定历史版本
 // =====================================================
 bool deleteFileVersion(
-    QSqlDatabase& db,
+    QSqlDatabase& database,
     int fileId,
     int versionNumber,
     const QString& owner)
@@ -1600,7 +1697,7 @@ bool deleteFileVersion(
     }
 
     // 查询指定版本，同时验证文件所有者
-    QSqlQuery findQuery(db);
+    QSqlQuery findQuery(database);
 
     findQuery.prepare(
         "SELECT v.path, f.path AS latest_path "
@@ -1651,32 +1748,32 @@ bool deleteFileVersion(
     }
 
     // 先临时改名，数据库操作失败时可以恢复
-    QString tempPath =
+    QString temporaryPath =
         versionPath + ".deleting";
 
-    if (QFile::exists(tempPath))
+    if (QFile::exists(temporaryPath))
     {
         qDebug() << "Temporary deletion file already exists:"
-            << tempPath;
+            << temporaryPath;
 
         return false;
     }
 
-    if (!QFile::rename(versionPath, tempPath))
+    if (!QFile::rename(versionPath, temporaryPath))
     {
         qDebug() << "Prepare version deletion failed.";
         return false;
     }
 
-    if (!db.transaction())
+    if (!database.transaction())
     {
         qDebug() << "Start version deletion transaction failed.";
 
-        QFile::rename(tempPath, versionPath);
+        QFile::rename(temporaryPath, versionPath);
         return false;
     }
 
-    QSqlQuery deleteQuery(db);
+    QSqlQuery deleteQuery(database);
 
     deleteQuery.prepare(
         "DELETE FROM file_versions "
@@ -1692,28 +1789,28 @@ bool deleteFileVersion(
         qDebug() << "Delete file version record failed:"
             << deleteQuery.lastError().text();
 
-        db.rollback();
-        QFile::rename(tempPath, versionPath);
+        database.rollback();
+        QFile::rename(temporaryPath, versionPath);
 
         return false;
     }
 
-    if (!db.commit())
+    if (!database.commit())
     {
         qDebug() << "Commit version deletion failed:"
-            << db.lastError().text();
+            << database.lastError().text();
 
-        db.rollback();
-        QFile::rename(tempPath, versionPath);
+        database.rollback();
+        QFile::rename(temporaryPath, versionPath);
 
         return false;
     }
 
-    if (!QFile::remove(tempPath))
+    if (!QFile::remove(temporaryPath))
     {
         qDebug() << "Warning: version record was deleted,"
             << "but temporary physical file remains:"
-            << tempPath;
+            << temporaryPath;
 
         return false;
     }
@@ -1745,15 +1842,15 @@ QString calculateFileSha256(
         QCryptographicHash::Sha256
     );
 
-    const qint64 BUFFER_SIZE =
+    const qint64 HASH_BUFFER_SIZE =
         1024 * 1024;
 
     while (!file.atEnd())
     {
-        QByteArray data =
-            file.read(BUFFER_SIZE);
+        const QByteArray fileChunk =
+            file.read(HASH_BUFFER_SIZE);
 
-        if (data.isEmpty() &&
+        if (fileChunk.isEmpty() &&
             file.error() != QFile::NoError)
         {
             qDebug() << "Read file for SHA-256 failed:"
@@ -1762,7 +1859,7 @@ QString calculateFileSha256(
             return "";
         }
 
-        hash.addData(data);
+        hash.addData(fileChunk);
     }
 
     QString sha256 =
@@ -1780,9 +1877,9 @@ QString calculateFileSha256(
 // 14. 为旧版本自动补齐SHA-256
 // =====================================================
 static bool backfillMissingSha256(
-    QSqlDatabase& db)
+    QSqlDatabase& database)
 {
-    QSqlQuery selectQuery(db);
+    QSqlQuery selectQuery(database);
 
     if (!selectQuery.exec(
         "SELECT id, path "
@@ -1825,7 +1922,7 @@ static bool backfillMissingSha256(
             continue;
         }
 
-        QSqlQuery updateQuery(db);
+        QSqlQuery updateQuery(database);
 
         updateQuery.prepare(
             "UPDATE file_versions "
@@ -1857,7 +1954,7 @@ static bool backfillMissingSha256(
 // 15. 根据SHA-256查找服务器已有文件
 // =====================================================
 QString findFilePathBySha256(
-    QSqlDatabase& db,
+    QSqlDatabase& database,
     const QString& sha256)
 {
     const QString normalizedSha256 =
@@ -1869,7 +1966,7 @@ QString findFilePathBySha256(
         return "";
     }
 
-    QSqlQuery query(db);
+    QSqlQuery query(database);
 
     query.prepare(
         "SELECT path "
@@ -1927,7 +2024,7 @@ QString findFilePathBySha256(
         }
 
         // 文件丢失或内容损坏，将对应版本标记为不完整
-        QSqlQuery invalidateQuery(db);
+        QSqlQuery invalidateQuery(database);
 
         invalidateQuery.prepare(
             "UPDATE file_versions "
@@ -1955,8 +2052,8 @@ QString findFilePathBySha256(
 // 16. 根据SHA-256完成基础秒传
 // =====================================================
 bool instantUploadFile(
-    QSqlDatabase& db,
-    const QString& filename,
+    QSqlDatabase& database,
+    const QString& fileName,
     const QString& sha256,
     const QString& owner)
 {
@@ -1968,9 +2065,9 @@ bool instantUploadFile(
         return false;
     }
 
-    if (filename.isEmpty() ||
-        filename.contains("/") ||
-        filename.contains("\\"))
+    if (fileName.isEmpty() ||
+        fileName.contains("/") ||
+        fileName.contains("\\"))
     {
         qDebug() << "Invalid filename.";
         return false;
@@ -1988,7 +2085,7 @@ bool instantUploadFile(
     // 查找服务器中已经存在的相同内容
     QString existingPath =
         findFilePathBySha256(
-            db,
+            database,
             normalizedSha256
         );
 
@@ -2010,7 +2107,7 @@ bool instantUploadFile(
     }
 
     // 同一用户不能存在同名逻辑文件
-    QSqlQuery duplicateQuery(db);
+    QSqlQuery duplicateQuery(database);
 
     duplicateQuery.prepare(
         "SELECT id "
@@ -2018,7 +2115,7 @@ bool instantUploadFile(
         "WHERE filename = ? AND owner = ?"
     );
 
-    duplicateQuery.addBindValue(filename);
+    duplicateQuery.addBindValue(fileName);
     duplicateQuery.addBindValue(owner);
 
     if (!duplicateQuery.exec())
@@ -2032,7 +2129,7 @@ bool instantUploadFile(
     if (duplicateQuery.next())
     {
         qDebug() << "File already exists for this user:"
-            << filename;
+            << fileName;
 
         return false;
     }
@@ -2044,14 +2141,14 @@ bool instantUploadFile(
         QDateTime::currentDateTime()
         .toString("yyyy-MM-dd HH:mm:ss");
 
-    if (!db.transaction())
+    if (!database.transaction())
     {
         qDebug() << "Start instant-upload transaction failed.";
         return false;
     }
 
     // 先建立逻辑文件记录以获得fileId
-    QSqlQuery insertFileQuery(db);
+    QSqlQuery insertFileQuery(database);
 
     insertFileQuery.prepare(
         "INSERT INTO files "
@@ -2059,7 +2156,7 @@ bool instantUploadFile(
         "VALUES (?, ?, ?, '', ?)"
     );
 
-    insertFileQuery.addBindValue(filename);
+    insertFileQuery.addBindValue(fileName);
     insertFileQuery.addBindValue(fileSize);
     insertFileQuery.addBindValue(owner);
     insertFileQuery.addBindValue(uploadTime);
@@ -2069,7 +2166,7 @@ bool instantUploadFile(
         qDebug() << "Insert instant-upload file failed:"
             << insertFileQuery.lastError().text();
 
-        db.rollback();
+        database.rollback();
         return false;
     }
 
@@ -2082,29 +2179,29 @@ bool instantUploadFile(
         "/" +
         QString::number(fileId);
 
-    QDir dir;
+    QDir storageDirectory;
 
-    if (!dir.exists(versionDirectory) &&
-        !dir.mkpath(versionDirectory))
+    if (!storageDirectory.exists(versionDirectory) &&
+        !storageDirectory.mkpath(versionDirectory))
     {
         qDebug() << "Create instant-upload directory failed:"
             << versionDirectory;
 
-        db.rollback();
+        database.rollback();
         return false;
     }
 
     QString targetPath =
         versionDirectory +
         "/v1_" +
-        filename;
+        fileName;
 
     if (QFile::exists(targetPath))
     {
         qDebug() << "Instant-upload target already exists:"
             << targetPath;
 
-        db.rollback();
+        database.rollback();
         return false;
     }
 
@@ -2113,11 +2210,11 @@ bool instantUploadFile(
     {
         qDebug() << "Server-side instant copy failed.";
 
-        db.rollback();
+        database.rollback();
         return false;
     }
 
-    QSqlQuery updateFileQuery(db);
+    QSqlQuery updateFileQuery(database);
 
     updateFileQuery.prepare(
         "UPDATE files "
@@ -2135,13 +2232,13 @@ bool instantUploadFile(
         qDebug() << "Update instant-upload path failed:"
             << updateFileQuery.lastError().text();
 
-        db.rollback();
+        database.rollback();
         QFile::remove(targetPath);
 
         return false;
     }
 
-    QSqlQuery insertVersionQuery(db);
+    QSqlQuery insertVersionQuery(database);
 
     insertVersionQuery.prepare(
         "INSERT INTO file_versions "
@@ -2161,18 +2258,18 @@ bool instantUploadFile(
         qDebug() << "Insert instant-upload version failed:"
             << insertVersionQuery.lastError().text();
 
-        db.rollback();
+        database.rollback();
         QFile::remove(targetPath);
 
         return false;
     }
 
-    if (!db.commit())
+    if (!database.commit())
     {
         qDebug() << "Commit instant upload failed:"
-            << db.lastError().text();
+            << database.lastError().text();
 
-        db.rollback();
+        database.rollback();
         QFile::remove(targetPath);
 
         return false;
@@ -2180,7 +2277,7 @@ bool instantUploadFile(
 
     qDebug() << "Instant upload completed successfully!";
     qDebug() << "File ID:" << fileId;
-    qDebug() << "Filename:" << filename;
+    qDebug() << "Filename:" << fileName;
     qDebug() << "SHA-256:" << normalizedSha256;
     qDebug() << "Path:" << targetPath;
 
@@ -2188,7 +2285,7 @@ bool instantUploadFile(
 }
 
 static bool recoverInterruptedDeletions(
-    QSqlDatabase& db)
+    QSqlDatabase& database)
 {
     const QString STORAGE_DIRECTORY =
         "data/files";
@@ -2239,7 +2336,7 @@ static bool recoverInterruptedDeletions(
             continue;
         }
 
-        QSqlQuery referenceQuery(db);
+        QSqlQuery referenceQuery(database);
 
         referenceQuery.prepare(
             "SELECT 1 FROM files "
@@ -2317,6 +2414,183 @@ static bool recoverInterruptedDeletions(
     qDebug() << "Recovery conflicts:" << conflictFileCount;
 
     return true;
+}
+
+} // namespace detail
+
+FileManager::FileManager(
+    QSqlDatabase& database,
+    StorageEngine& storageEngine)
+    : m_database(database),
+      m_storageEngine(storageEngine)
+{
+}
+
+bool FileManager::initialize(const QString& databasePath)
+{
+    if (!m_storageEngine.initialize())
+    {
+        return false;
+    }
+
+    return detail::initDatabase(m_database, databasePath);
+}
+
+bool FileManager::addFile(
+    const QString& sourcePath,
+    const QString& owner)
+{
+    return detail::addFile(m_database, sourcePath, owner);
+}
+
+bool FileManager::addUploadedFile(
+    const QString& temporaryFilePath,
+    const QString& owner,
+    const QString& clientSha256)
+{
+    return detail::addUploadedFile(
+        m_database,
+        temporaryFilePath,
+        owner,
+        clientSha256
+    );
+}
+
+void FileManager::listFiles(const QString& owner)
+{
+    detail::listFiles(m_database, owner);
+}
+
+bool FileManager::deleteFile(int fileId, const QString& owner)
+{
+    return detail::deleteFile(m_database, fileId, owner);
+}
+
+bool FileManager::renameFile(
+    int fileId,
+    const QString& owner,
+    const QString& newFileName)
+{
+    return detail::renameFile(
+        m_database,
+        fileId,
+        owner,
+        newFileName
+    );
+}
+
+QString FileManager::getFilePath(
+    int fileId,
+    const QString& owner)
+{
+    return detail::getFilePath(m_database, fileId, owner);
+}
+
+QString FileManager::getFileSha256(
+    int fileId,
+    const QString& owner)
+{
+    return detail::getFileSha256(m_database, fileId, owner);
+}
+
+QString FileManager::getFileVersionSha256(
+    int fileId,
+    int versionNumber,
+    const QString& owner)
+{
+    return detail::getFileVersionSha256(
+        m_database,
+        fileId,
+        versionNumber,
+        owner
+    );
+}
+
+void FileManager::listFileVersions(
+    int fileId,
+    const QString& owner)
+{
+    detail::listFileVersions(m_database, fileId, owner);
+}
+
+bool FileManager::addFileVersion(
+    int fileId,
+    const QString& sourcePath,
+    const QString& owner)
+{
+    return detail::addFileVersion(
+        m_database,
+        fileId,
+        sourcePath,
+        owner
+    );
+}
+
+bool FileManager::addUploadedFileVersion(
+    int fileId,
+    const QString& temporaryFilePath,
+    const QString& owner,
+    const QString& clientSha256)
+{
+    return detail::addUploadedFileVersion(
+        m_database,
+        fileId,
+        temporaryFilePath,
+        owner,
+        clientSha256
+    );
+}
+
+QString FileManager::getFileVersionPath(
+    int fileId,
+    int versionNumber,
+    const QString& owner)
+{
+    return detail::getFileVersionPath(
+        m_database,
+        fileId,
+        versionNumber,
+        owner
+    );
+}
+
+bool FileManager::restoreFileVersion(
+    int fileId,
+    int versionNumber,
+    const QString& owner)
+{
+    return detail::restoreFileVersion(
+        m_database,
+        fileId,
+        versionNumber,
+        owner
+    );
+}
+
+bool FileManager::deleteFileVersion(
+    int fileId,
+    int versionNumber,
+    const QString& owner)
+{
+    return detail::deleteFileVersion(
+        m_database,
+        fileId,
+        versionNumber,
+        owner
+    );
+}
+
+bool FileManager::instantUploadFile(
+    const QString& fileName,
+    const QString& sha256,
+    const QString& owner)
+{
+    return detail::instantUploadFile(
+        m_database,
+        fileName,
+        sha256,
+        owner
+    );
 }
 
 } // namespace server
