@@ -15,16 +15,22 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="StorageManager.h">
-      <Filter>头文件</Filter>
-    </ClInclude>
+    <ClCompile Include="src\main.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="src\FileManager.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="src\StorageEngine.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="StorageManager.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
-    <ClCompile Include="ServerMain.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
+    <ClInclude Include="include\FileManager.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="include\StorageEngine.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

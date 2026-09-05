@@ -1,5 +1,6 @@
 #include <QCoreApplication>
-#include "StorageManager.h"
+#include "FileManager.h"
+#include "StorageEngine.h"
 
 #include <QSqlDatabase>
 #include <QDebug>
@@ -7,7 +8,8 @@
 #include <QTcpSocket>
 #include <QHostAddress>
 
-using namespace netdisk::server;
+using netdisk::server::FileManager;
+using netdisk::server::StorageEngine;
 
 // =====================================================
 // 主函数
@@ -17,29 +19,22 @@ int main(int argc, char* argv[])
     QCoreApplication app(argc, argv);
 
 
-    QSqlDatabase db;
+    QSqlDatabase database;
+    StorageEngine storageEngine;
+    FileManager fileManager(database, storageEngine);
 
 
     // -------------------------------------------------
     // 初始化 SQLite 数据库
     // -------------------------------------------------
-    if (!initDatabase(db))
-    {
-        return -1;
-    }
-
-
-    // -------------------------------------------------
-    // 初始化服务器文件存储目录
-    // -------------------------------------------------
-    if (!initStorageDirectory())
+    if (!fileManager.initialize("server.db"))
     {
         return -1;
     }
 
 
     // 当前测试用户
-    QString currentUser =
+    const QString currentUser =
         "user01";
  
     // =================================================
@@ -63,13 +58,12 @@ int main(int argc, char* argv[])
     // -------------------------------------------------
 
     /*
-    bool addSuccess = addFile(
-        db,
+    const bool isFileAdded = fileManager.addFile(
         "D:/sizheng.pdf",
         currentUser
     );
 
-    if (addSuccess)
+    if (isFileAdded)
     {
         qDebug() << "测试新增成功！";
     }
@@ -84,24 +78,20 @@ int main(int argc, char* argv[])
      // 当前默认开启
      // -------------------------------------------------
 
-    listFiles(
-        db,
-        currentUser
-    );
+    fileManager.listFiles(currentUser);
 
     // -------------------------------------------------
 // 一次性测试：为ID 5添加v2
 // 只运行一次，成功后必须关闭
 // -------------------------------------------------
 /*
-    bool versionSuccess = addFileVersion(
-        db,
+    const bool isVersionAdded = fileManager.addFileVersion(
         1,
         "D:/sizheng.pdf",
         currentUser
     );
 
-    if (versionSuccess)
+    if (isVersionAdded)
     {
         qDebug() << "Version test succeeded!";
     }
@@ -110,8 +100,7 @@ int main(int argc, char* argv[])
         qDebug() << "Version test failed!";
     }
 
-    listFileVersions(
-        db,
+    fileManager.listFileVersions(
         1,
         currentUser
     );
@@ -121,8 +110,7 @@ int main(int argc, char* argv[])
 // 成功后必须关闭
 // -------------------------------------------------
     /*
-bool isRestoreSuccessful = restoreFileVersion(
-    db,
+const bool isRestoreSuccessful = fileManager.restoreFileVersion(
     1,
     1,
     currentUser
@@ -137,8 +125,7 @@ else
     qDebug() << "Restore test failed!";
 }
 
-listFileVersions(
-    db,
+fileManager.listFileVersions(
     1,
     currentUser
 );
@@ -150,13 +137,12 @@ listFileVersions(
     // -------------------------------------------------
 
     /*
-    bool deleteSuccess = deleteFile(
-        db,
+    const bool isFileDeleted = fileManager.deleteFile(
         4,
         currentUser
     );
 
-    if (deleteSuccess)
+    if (isFileDeleted)
     {
         qDebug() << "Delete test succeeded!";
     }
@@ -172,8 +158,7 @@ listFileVersions(
     // -------------------------------------------------
 
     /*
-    renameFile(
-        db,
+    fileManager.renameFile(
         1,
         currentUser,
         "new_name.pdf"
@@ -186,8 +171,7 @@ listFileVersions(
 // 将 1 改成数据库中真实存在的文件 ID
 // -------------------------------------------------
 /*
-QString filePath = getFilePath(
-    db,
+const QString filePath = fileManager.getFilePath(
     4,
     currentUser
 );
@@ -201,20 +185,12 @@ if (!filePath.isEmpty())
 
 // 前面的添加、版本添加、恢复测试都已注释
 
-// 安全测试代码放这里
-QString versionPath = getFileVersionPath(
-    db,
-    1,
-    1,
-    currentUser
-);
 
 // -------------------------------------------------
 // 安全测试：读取v1路径，并验证最新版本不能删除
 // -------------------------------------------------
 /*
-QString versionOnePath = getFileVersionPath(
-    db,
+const QString versionOnePath = fileManager.getFileVersionPath(
     1,
     1,
     currentUser
@@ -226,8 +202,7 @@ if (!versionOnePath.isEmpty())
         << versionOnePath;
 }
 
-bool isLatestDeleteAllowed = deleteFileVersion(
-    db,
+const bool isLatestDeleteAllowed = fileManager.deleteFileVersion(
     1,
     3,
     currentUser
@@ -239,8 +214,7 @@ if (!isLatestDeleteAllowed)
         << "Safety test passed: latest version was protected.";
 }
 
-listFileVersions(
-    db,
+fileManager.listFileVersions(
     1,
     currentUser
 );
@@ -255,11 +229,10 @@ listFileVersions(
 // 成功运行一次后必须注释
 // -------------------------------------------------
     /*
-    QString testSha256 =
+    const QString testSha256 =
         "58055843f8f14fb4decc09feb0e6ed43e8d81c7fcafa6d86fb209e672b2592fb";
 
-    bool isInstantUploadSuccessful = instantUploadFile(
-        db,
+    const bool isInstantUploadSuccessful = fileManager.instantUploadFile(
         "sizheng_instant_copy.pdf",
         testSha256,
         currentUser
@@ -274,10 +247,8 @@ listFileVersions(
         qDebug() << "Instant upload test failed!";
     }
 
-    listFiles(
-        db,
-        currentUser
-    );*/
+    fileManager.listFiles(currentUser);
+    */
 
     if (!tcpServer.listen(QHostAddress::AnyIPv4, 8888))
     {
@@ -291,8 +262,8 @@ listFileVersions(
     qDebug() << "Listening port:"
         << tcpServer.serverPort();
 
-    int exitCode = app.exec();
+    const int exitCode = app.exec();
 
-    db.close();
+    database.close();
     return exitCode;
     }
